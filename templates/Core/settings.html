@@ -1,0 +1,16 @@
+<!-- templates/core/settings.html -->
+{% extends "base.html" %}
+{% block title %}הגדרות{% endblock %}
+
+{% block content %}
+<h1>הגדרות – {{ business.name }}</h1>
+
+<p>בשלב זה זה רק מסך בסיסי. בהמשך נוסיף כאן:</p>
+<ul>
+    <li>הגדרת זמני תזכורות (24/3 שעות לפני תור וכו’)</li>
+    <li>בחירת ערוץ (WhatsApp / SMS / Email)</li>
+    <li>עריכת נוסח הודעות</li>
+</ul>
+
+<p>בינתיים זה נותן לנו UI ראשוני ללקוח.</p>
+{% endblock %}

@@ -1,0 +1,47 @@
+<!-- templates/base.html -->
+<!doctype html>
+<html lang="he">
+<head>
+    <meta charset="utf-8">
+    <title>{% block title %}Automation SaaS{% endblock %}</title>
+    <style>
+        body { font-family: Arial, sans-serif; direction: rtl; margin: 0; padding: 0; }
+        header, footer { background: #222; color: #fff; padding: 10px 20px; }
+        main { padding: 20px; }
+        a { color: #0077cc; text-decoration: none; }
+        .top-nav { display: flex; justify-content: space-between; align-items: center; }
+        .stats { display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
+        .stat-box { border: 1px solid #ccc; padding: 10px; border-radius: 6px; min-width: 150px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
+        th { background: #f0f0f0; }
+    </style>
+</head>
+<body>
+<header>
+    <div class="top-nav">
+        <div>
+            <strong>Automation SaaS</strong>
+        </div>
+        <div>
+            {% if user.is_authenticated %}
+                {{ user.username }} |
+                <a href="{% url 'dashboard' %}">דשבורד</a> |
+                <a href="{% url 'settings' %}">הגדרות</a> |
+                <a href="{% url 'logout' %}">התנתק</a>
+            {% else %}
+                <a href="{% url 'login' %}">התחברות</a>
+            {% endif %}
+        </div>
+    </div>
+</header>
+
+<main>
+    {% block content %}{% endblock %}
+</main>
+
+<footer>
+    <small>מנוע אוטומציה לעסקים מבוססי תורים</small>
+</footer>
+</body>
+</html>

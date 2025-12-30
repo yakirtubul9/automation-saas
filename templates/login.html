@@ -1,0 +1,12 @@
+<!-- templates/login.html -->
+{% extends "base.html" %}
+{% block title %}התחברות{% endblock %}
+
+{% block content %}
+<h1>התחברות</h1>
+<form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">התחבר</button>
+</form>
+{% endblock %}

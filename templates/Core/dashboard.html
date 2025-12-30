@@ -1,0 +1,48 @@
+<!-- templates/core/dashboard.html -->
+{% extends "base.html" %}
+{% block title %}דשבורד{% endblock %}
+
+{% block content %}
+<h1>דשבורד – {{ business.name }}</h1>
+
+<div class="stats">
+    <div class="stat-box">
+        <strong>תורים היום</strong><br>
+        {{ today_appointments }}
+    </div>
+    <div class="stat-box">
+        <strong>תזכורות ממתינות</strong><br>
+        {{ reminders_pending }}
+    </div>
+    <div class="stat-box">
+        <strong>תזכורות שנשלחו היום</strong><br>
+        {{ reminders_sent_today }}
+    </div>
+</div>
+
+<h2>תורים קרובים</h2>
+<table>
+    <thead>
+    <tr>
+        <th>לקוח</th>
+        <th>שירות</th>
+        <th>זמן התחלה</th>
+        <th>סטטוס</th>
+    </tr>
+    </thead>
+    <tbody>
+    {% for appt in upcoming_appointments %}
+        <tr>
+            <td>{{ appt.client.full_name }}</td>
+            <td>{% if appt.service %}{{ appt.service.name }}{% else %}-{% endif %}</td>
+            <td>{{ appt.start_time }}</td>
+            <td>{{ appt.get_status_display }}</td>
+        </tr>
+    {% empty %}
+        <tr>
+            <td colspan="4">אין תורים קרובים.</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

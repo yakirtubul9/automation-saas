@@ -1,6 +1,7 @@
 # core/views.py
+from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.utils import timezone
 
 from .models import Business, Appointment, Reminder
@@ -16,6 +17,7 @@ def _get_or_create_business_for_user(user) -> Business:
 
 @login_required
 def dashboard(request):
+    # מקור אמת יחיד: הפונקציה הזו
     business = _get_or_create_business_for_user(request.user)
 
     now = timezone.now()
@@ -50,7 +52,6 @@ def dashboard(request):
         "reminders_sent_today": reminders_sent_today,
     }
 
-    # שים לב: אצלך התיקייה היא templates/Core ולכן זה חייב להיות "Core/..."
     return render(request, "Core/dashboard.html", context)
 
 
@@ -58,3 +59,8 @@ def dashboard(request):
 def settings_view(request):
     business = _get_or_create_business_for_user(request.user)
     return render(request, "Core/settings.html", {"business": business})
+
+
+def logout_view(request):
+    logout(request)
+    return redirect("login")

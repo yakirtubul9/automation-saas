@@ -100,38 +100,4 @@
 
 ---
 
-## מה ממומש בפועל בקוד (שלב 1)
-- מודלים חדשים/מורחבים:
-  - `Provider` (רופא/מטפל בתוך Business)
-  - `BusinessStaff` (צוות/מזכירות + דגל `can_view_client_details` = False כברירת־מחדל)
-  - `ConfirmationToken` (קישורי Confirm/Cancel)
-  - `AppointmentCancellationRequest` (בקשת ביטול לאישור צוות)
-  - `OutgoingMessageLog` (לוג הודעות יוצאות)
-  - שדה `price_ils` ב־`Service`
-  - סטטוס חדש ל־Appointment: `cancellation_requested`
-  - שדה חדש ב־Appointment: `provider` (כדי לתמוך במספר רופאים תחת אותו Business)
-  - `Resource` נשאר כ"משאב" (בבית רופאים נשתמש בו בעיקר כחדר/Room)
-
-- הרשאות/תצוגה (MVP):
-  - Owner: רואה הכל
-  - Provider: רואה רק את התורים שלו
-  - Staff: רואה תורים/תפוסה אבל ללא פרטי מטופלים (רק "מטופל")
-
-- Signal:
-  - יצירת תזכורות בעת יצירת Appointment
-- Management command:
-  - `python manage.py send_due_reminders` (שולח WhatsApp Mock + רושם לוג)
-- Public endpoint:
-  - `/c/<uuid:token>/` לביצוע confirm/cancel
-- Templates:
-  - דשבורד עם עמודת רופא + masking לפרטי לקוח לצוות
-
----
-
-## איך ממשיכים מכאן (אחרי שלב 1)
-1) להריץ migrations
-2) לייצר Business/Service/Client/Appointment דרך `/admin`
-3) להריץ `send_due_reminders` כדי “לשלוח” הודעות (Mock)
-4) להעתיק את ה־URL מהלוג (OutgoingMessageLog) ולבדוק את הקלקה על confirm/cancel
-5) אחרי שזה עובד: עוברים לשלב 2 (Waitlist)
 

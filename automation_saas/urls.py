@@ -16,3 +16,4 @@ urlpatterns = [
     path("settings/", core_views.settings_view, name="settings"),
 ]
 
+

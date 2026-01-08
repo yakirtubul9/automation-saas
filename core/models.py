@@ -56,7 +56,49 @@ class Appointment(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
-    def __str__(self):
+    
+
+    def save(self, *args, **kwargs):
+        """Persist appointment and ensure default reminders exist on first save.
+
+        This is a safety net (e.g., if signals are not loaded for any reason).
+        """
+        is_new = self.pk is None
+        prev_status = None
+        if not is_new:
+            prev_status = (
+                Appointment.objects.filter(pk=self.pk)
+                .values_list("status", flat=True)
+                .first()
+            )
+
+        super().save(*args, **kwargs)
+
+        # Create default reminders once
+        if is_new and self.status not in (
+            Appointment.Status.CANCELLED_CLIENT,
+            Appointment.Status.CANCELLED_STAFF,
+            Appointment.Status.COMPLETED,
+            Appointment.Status.NO_SHOW,
+        ):
+            from .reminders import ensure_reminders_for_appointment
+
+            ensure_reminders_for_appointment(self)
+
+        # On transition to terminal/cancelled statuses, skip pending reminders
+        if prev_status is not None and prev_status != self.status:
+            if self.status in (
+                Appointment.Status.CANCELLED_CLIENT,
+                Appointment.Status.CANCELLED_STAFF,
+                Appointment.Status.COMPLETED,
+                Appointment.Status.NO_SHOW,
+            ):
+                from .reminders import skip_pending_reminders
+
+                skip_pending_reminders(self)
+
+
+def __str__(self):
         return f"{self.client.full_name} @ {self.start_time} ({self.business.name})"
 
 

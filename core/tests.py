@@ -176,3 +176,31 @@ class PublicLinksTests(TestCase):
 
         appt.refresh_from_db()
         self.assertEqual(appt.status, Appointment.Status.CANCELLED_CLIENT)
+
+
+
+class AutoReminderCreationTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username="u3", password="pass12345")
+        self.client.login(username="u3", password="pass12345")
+        self.client.get(reverse("dashboard"))
+        self.biz = Business.objects.get(owner=self.user)
+        self.c = Client.objects.create(business=self.biz, full_name="Client B", phone_number="0500000001")
+        self.s = Service.objects.create(business=self.biz, name="Service X", duration_minutes=60)
+
+    def test_auto_reminders_created_on_appointment_create(self):
+        now = timezone.now()
+        start = now + timedelta(days=3)
+        appt = Appointment.objects.create(
+            business=self.biz,
+            client=self.c,
+            service=self.s,
+            start_time=start,
+            end_time=start + timedelta(minutes=60),
+            status=Appointment.Status.SCHEDULED,
+        )
+        self.assertEqual(appt.reminders.count(), 2)
+        types = set(appt.reminders.values_list("type", flat=True))
+        self.assertIn(Reminder.ReminderType.PRIMARY_24H, types)
+        self.assertIn(Reminder.ReminderType.SECONDARY_3H, types)

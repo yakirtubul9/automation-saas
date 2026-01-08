@@ -1,5 +1,18 @@
 from django.contrib import admin
+from django.utils import timezone
+
 from .models import Business, Client, Service, Appointment, Reminder
+
+
+def mark_reminders_as_sent(modeladmin, request, queryset):
+    now = timezone.now()
+    updated = queryset.filter(status=Reminder.ReminderStatus.PENDING).update(
+        status=Reminder.ReminderStatus.SENT,
+        sent_at=now,
+    )
+    modeladmin.message_user(request, f"Marked {updated} reminders as SENT.")
+
+mark_reminders_as_sent.short_description = "Mark selected PENDING reminders as SENT"
 
 
 @admin.register(Business)
@@ -33,3 +46,4 @@ class AppointmentAdmin(admin.ModelAdmin):
 class ReminderAdmin(admin.ModelAdmin):
     list_display = ("appointment", "type", "channel", "scheduled_time", "status", "sent_at")
     list_filter = ("status", "type", "channel")
+    actions = [mark_reminders_as_sent]

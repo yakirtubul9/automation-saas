@@ -53,7 +53,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "core",
+    "core.apps.CoreConfig",
 ]
 
 MIDDLEWARE = [
@@ -132,6 +132,15 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+# Public base URL used in reminder links (set this in Render env vars)
+# Example: https://automation-saas-1.onrender.com
+SITE_BASE_URL = os.getenv("SITE_BASE_URL", "http://127.0.0.1:8000")
+
+# How long public confirm/cancel links remain valid (seconds)
+APPOINTMENT_ACTION_LINK_MAX_AGE_SECONDS = int(os.getenv("APPOINTMENT_ACTION_LINK_MAX_AGE_SECONDS", str(14 * 24 * 60 * 60)))
+
 
 
 # When running behind a proxy (Render), this helps Django detect HTTPS correctly

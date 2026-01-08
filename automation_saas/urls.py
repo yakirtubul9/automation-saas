@@ -14,6 +14,7 @@ urlpatterns = [
     path("logout/", core_views.logout_view, name="logout"),
     path("", core_views.dashboard, name="dashboard"),
     path("settings/", core_views.settings_view, name="settings"),
+    path("a/<str:token>/<str:action>/", core_views.appointment_action_view, name="appointment_action"),
 ]
 
 

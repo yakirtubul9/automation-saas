@@ -41,6 +41,15 @@ def ensure_reminders_for_appointment(appt: Appointment) -> None:
             if scheduled_time > now
             else Reminder.ReminderStatus.SKIPPED
         )
+        Reminder.objects.get_or_create(
+            appointment=appt,
+            type=reminder_type,
+            defaults={
+                "scheduled_time": scheduled_time,
+                "status": status,
+                "channel": Reminder.Channel.WHATSAPP,
+            },
+        )
 
 
 def skip_pending_reminders(appt: Appointment) -> int:

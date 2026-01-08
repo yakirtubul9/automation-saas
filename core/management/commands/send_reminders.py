@@ -5,6 +5,8 @@ from django.utils import timezone
 
 from core.models import Appointment, Reminder
 from core.views import build_public_action_url, make_appointment_action_token
+from core.notifications import get_provider
+provider = get_provider()
 
 
 class Command(BaseCommand):
@@ -64,6 +66,7 @@ class Command(BaseCommand):
             self.stdout.write(msg)
 
             if execute:
+                provider_id = provider.send(to=client.phone_number, body=msg)
                 r.status = Reminder.ReminderStatus.SENT
                 r.sent_at = now
                 r.save(update_fields=["status", "sent_at"])

@@ -26,6 +26,15 @@ def _normalize_phone(to: str, *, default_country_code: Optional[str] = None) -> 
 
     return digits
 
+def _sanitize_template_param(text: str) -> str:
+    """
+    WhatsApp template params cannot include newline/tab chars or >4 consecutive spaces.
+    We'll flatten whitespace safely.
+    """
+    s = (text or "").replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    s = re.sub(r" {5,}", "    ", s)   # max 4 spaces in a row
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 class WhatsAppCloudProvider(NotificationProvider):
     """
@@ -74,7 +83,7 @@ class WhatsAppCloudProvider(NotificationProvider):
                         {
                             "type": "body",
                             "parameters": [
-                                {"type": "text", "text": body[:1024]},
+                                {"type": "text", "text": _sanitize_template_param(body)[:1024]},
                             ],
                         }
                     ],

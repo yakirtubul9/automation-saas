@@ -53,6 +53,7 @@ class WhatsAppCloudProvider(NotificationProvider):
 
     def send(self, *, to: str, body: str) -> str:
         to_norm = _normalize_phone(to, default_country_code=self.default_country_code)
+        print(f"[WA DEBUG] to_raw={to} to_norm={to_norm} from_phone_number_id={self.phone_number_id}")
 
         headers = {
             "Authorization": f"Bearer {self.access_token}",

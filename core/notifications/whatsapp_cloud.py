@@ -73,7 +73,7 @@ class WhatsAppCloudProvider(NotificationProvider):
         # Otherwise, send plain text (works reliably only inside an open 24h session).
         if self.template_name:
             # Special-case: Meta's built-in hello_world template expects 0 params
-            if self.template_name == "hello_world":
+            if (self.template_name or "").strip().lower() == "hello_world":
                 payload = {
                     "messaging_product": "whatsapp",
                     "to": to_norm,

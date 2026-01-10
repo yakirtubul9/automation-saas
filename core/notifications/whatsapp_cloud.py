@@ -72,23 +72,35 @@ class WhatsAppCloudProvider(NotificationProvider):
         # If template is configured, send as a template message (safer for business-initiated messages).
         # Otherwise, send plain text (works reliably only inside an open 24h session).
         if self.template_name:
-            payload = {
-                "messaging_product": "whatsapp",
-                "to": to_norm,
-                "type": "template",
-                "template": {
-                    "name": self.template_name,
-                    "language": {"code": self.template_lang},
-                    "components": [
-                        {
-                            "type": "body",
-                            "parameters": [
-                                {"type": "text", "text": _sanitize_template_param(body)[:1024]},
-                            ],
-                        }
-                    ],
-                },
-            }
+            # Special-case: Meta's built-in hello_world template expects 0 params
+            if self.template_name == "hello_world":
+                payload = {
+                    "messaging_product": "whatsapp",
+                    "to": to_norm,
+                    "type": "template",
+                    "template": {
+                        "name": self.template_name,
+                        "language": {"code": self.template_lang},
+                    },
+                }
+            else:
+                payload = {
+                    "messaging_product": "whatsapp",
+                    "to": to_norm,
+                    "type": "template",
+                    "template": {
+                        "name": self.template_name,
+                        "language": {"code": self.template_lang},
+                        "components": [
+                            {
+                                "type": "body",
+                                "parameters": [
+                                    {"type": "text", "text": _sanitize_template_param(body)[:1024]},
+                                ],
+                            }
+                        ],
+                    },
+                }
         else:
             payload = {
                 "messaging_product": "whatsapp",

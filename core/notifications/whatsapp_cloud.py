@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+import os
+import re
+from typing import Optional
+
+import requests
+from django.utils import timezone
+
+from .base import NotificationProvider
+
+
+def _normalize_phone(to: str, *, default_country_code: Optional[str] = None) -> str:
+    """
+    WhatsApp Cloud API expects an international number with country code.
+    We'll strip non-digits and (optionally) convert local Israeli "05..." to "9725...".
+    """
+    digits = re.sub(r"\D+", "", to or "")
+    if not digits:
+        raise ValueError("Empty phone number")
+
+    # If user stored "+972..." it's now "972..."
+    # If stored "05X..." and you set DEFAULT_COUNTRY_CODE=972 -> convert.
+    if default_country_code and digits.startswith("0"):
+        digits = default_country_code + digits[1:]
+
+    return digits
+
+
+class WhatsAppCloudProvider(NotificationProvider):
+    """
+    Sends messages via WhatsApp Cloud API (Meta Graph).
+    Endpoint pattern: https://graph.facebook.com/{VERSION}/{PHONE_NUMBER_ID}/messages
+    :contentReference[oaicite:2]{index=2}
+    """
+
+    def __init__(self) -> None:
+        self.access_token = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip()
+        self.phone_number_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
+        self.graph_version = os.getenv("WHATSAPP_GRAPH_VERSION", "v18.0").strip()
+        self.default_country_code = os.getenv("DEFAULT_COUNTRY_CODE", "").strip() or None
+
+        # Optional: if you have an approved template, set it and we’ll use it.
+        self.template_name = os.getenv("WHATSAPP_TEMPLATE_NAME", "").strip() or None
+        self.template_lang = os.getenv("WHATSAPP_TEMPLATE_LANG", "he").strip()
+
+        if not self.access_token:
+            raise ValueError("Missing WHATSAPP_ACCESS_TOKEN")
+        if not self.phone_number_id:
+            raise ValueError("Missing WHATSAPP_PHONE_NUMBER_ID")
+
+        self.base_url = f"https://graph.facebook.com/{self.graph_version}/{self.phone_number_id}/messages"
+
+    def send(self, *, to: str, body: str) -> str:
+        to_norm = _normalize_phone(to, default_country_code=self.default_country_code)
+
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+
+        # If template is configured, send as a template message (safer for business-initiated messages).
+        # Otherwise, send plain text (works reliably only inside an open 24h session).
+        if self.template_name:
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": to_norm,
+                "type": "template",
+                "template": {
+                    "name": self.template_name,
+                    "language": {"code": self.template_lang},
+                    "components": [
+                        {
+                            "type": "body",
+                            "parameters": [
+                                {"type": "text", "text": body[:1024]},
+                            ],
+                        }
+                    ],
+                },
+            }
+        else:
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": to_norm,
+                "type": "text",
+                "text": {"body": body[:4096]},
+            }
+
+        resp = requests.post(self.base_url, json=payload, headers=headers, timeout=20)
+        try:
+            data = resp.json()
+        except Exception:
+            data = {"raw": resp.text}
+
+        if resp.status_code >= 400:
+            raise RuntimeError(f"WhatsApp send failed ({resp.status_code}): {data}")
+
+        # Successful responses include an id (often a wamid*).
+        # :contentReference[oaicite:3]{index=3}
+        msg_id = None
+        if isinstance(data, dict):
+            msgs = data.get("messages") or []
+            if msgs and isinstance(msgs, list) and isinstance(msgs[0], dict):
+                msg_id = msgs[0].get("id")
+
+        return msg_id or f"whatsapp-{timezone.now().timestamp()}"

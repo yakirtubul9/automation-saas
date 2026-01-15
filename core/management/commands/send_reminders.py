@@ -6,7 +6,6 @@ from django.utils import timezone
 from core.models import Appointment, Reminder
 from core.views import build_public_action_url, make_appointment_action_token
 from core.notifications import get_provider
-provider = get_provider()
 
 
 class Command(BaseCommand):
@@ -26,6 +25,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        provider = get_provider()
         now = timezone.now()
         limit = int(options["limit"])
         execute = bool(options["execute"])
@@ -55,7 +55,9 @@ class Command(BaseCommand):
 
             url_confirm = build_public_action_url(token=token_confirm, action="confirm")
             url_cancel = build_public_action_url(token=token_cancel, action="cancel")
-
+            dt = timezone.localtime(appt.start_time)
+            date_str = dt.strftime("%d/%m/%Y")
+            time_str = dt.strftime("%H:%M")
             msg = (
                 f"REMINDER #{r.id} | {r.type} | scheduled={r.scheduled_time:%Y-%m-%d %H:%M}\n"
                 f"Client: {client.full_name} | phone={client.phone_number}\n"
@@ -66,10 +68,15 @@ class Command(BaseCommand):
             self.stdout.write(msg)
 
             if execute:
-                provider_id = provider.send(to=client.phone_number, body=msg)
-                r.status = Reminder.ReminderStatus.SENT
-                r.sent_at = now
-                r.save(update_fields=["status", "sent_at"])
+                provider_id = provider.send(
+                    to=client.phone_number,
+                    body=msg,  # נשאר בשביל log/debug; בתבנית לא חייבים להשתמש בו
+                    template_params=[date_str, time_str, url_confirm, url_cancel],
+                )
+        r.status = Reminder.ReminderStatus.SENT
+        r.sent_at = timezone.now()
+        r.provider_message_id = provider_id  # אם יש לך שדה כזה
+        r.save(update_fields=["status", "sent_at", "provider_message_id"])
 
         if execute:
             self.stdout.write(self.style.SUCCESS("\nDone. Marked reminders as SENT."))

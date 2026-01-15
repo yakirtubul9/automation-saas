@@ -8,6 +8,7 @@ import requests
 from django.utils import timezone
 
 from .base import NotificationProvider
+from typing import Optional, Sequence
 
 
 def _normalize_phone(to: str, *, default_country_code: Optional[str] = None) -> str:
@@ -60,7 +61,7 @@ class WhatsAppCloudProvider(NotificationProvider):
 
         self.base_url = f"https://graph.facebook.com/{self.graph_version}/{self.phone_number_id}/messages"
 
-    def send(self, *, to: str, body: str) -> str:
+    def send(self, *, to: str, body: str, template_params: Optional[Sequence[str]] = None) -> str:
         to_norm = _normalize_phone(to, default_country_code=self.default_country_code)
         print(f"[WA DEBUG] to_raw={to} to_norm={to_norm} from_phone_number_id={self.phone_number_id}")
 
@@ -69,10 +70,7 @@ class WhatsAppCloudProvider(NotificationProvider):
             "Content-Type": "application/json",
         }
 
-        # If template is configured, send as a template message (safer for business-initiated messages).
-        # Otherwise, send plain text (works reliably only inside an open 24h session).
         if self.template_name:
-            # Special-case: Meta's built-in hello_world template expects 0 params
             if (self.template_name or "").strip().lower() == "hello_world":
                 payload = {
                     "messaging_product": "whatsapp",
@@ -84,6 +82,9 @@ class WhatsAppCloudProvider(NotificationProvider):
                     },
                 }
             else:
+                # אם לא הועברו פרמטרים — נשמור תאימות אחורה ונשלח את body כפרמטר אחד
+                params = list(template_params) if template_params is not None else [body]
+
                 payload = {
                     "messaging_product": "whatsapp",
                     "to": to_norm,
@@ -95,7 +96,8 @@ class WhatsAppCloudProvider(NotificationProvider):
                             {
                                 "type": "body",
                                 "parameters": [
-                                    {"type": "text", "text": _sanitize_template_param(body)[:1024]},
+                                    {"type": "text", "text": _sanitize_template_param(p)[:1024]}
+                                    for p in params
                                 ],
                             }
                         ],

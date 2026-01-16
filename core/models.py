@@ -1,15 +1,72 @@
-from django.db import models
+from __future__ import annotations
+
 from django.contrib.auth.models import User
+from django.db import models
 
 
 class Business(models.Model):
     owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name="businesses")
     name = models.CharField(max_length=200)
     timezone = models.CharField(max_length=64, default="Asia/Jerusalem")
+    # 0 = allow automatic client cancellation anytime
+    auto_cancel_cutoff_hours = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.name
+
+
+class Specialty(models.Model):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="specialties")
+    name = models.CharField(max_length=120)
+
+    class Meta:
+        unique_together = ("business", "name")
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.business.name})"
+
+
+class Room(models.Model):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="rooms")
+    name = models.CharField(max_length=120)
+    specialties = models.ManyToManyField(Specialty, related_name="rooms", blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ("business", "name")
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.business.name})"
+
+
+class Provider(models.Model):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="providers")
+    display_name = models.CharField(max_length=200)
+    whatsapp_number = models.CharField(max_length=50, blank=True, default="")
+    specialty = models.ForeignKey(Specialty, on_delete=models.SET_NULL, null=True, blank=True, related_name="providers")
+    is_active = models.BooleanField(default=True)
+
+    def __str__(self) -> str:
+        return f"{self.display_name} ({self.business.name})"
+
+
+class BusinessMembership(models.Model):
+    class Role(models.TextChoices):
+        OWNER = "owner", "Owner"
+        STAFF = "staff", "Staff"
+        PROVIDER = "provider", "Provider"
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="memberships")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="business_memberships")
+    role = models.CharField(max_length=20, choices=Role.choices, default=Role.STAFF)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("business", "user", "role")
+
+    def __str__(self) -> str:
+        return f"{self.user.username} -> {self.business.name} ({self.role})"
 
 
 class Client(models.Model):
@@ -20,8 +77,26 @@ class Client(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.full_name} ({self.business.name})"
+
+
+class ClientOnboarding(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        NEEDS_INFO = "needs_info", "Needs info"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="client_onboardings")
+    phone_number = models.CharField(max_length=50)
+    full_name = models.CharField(max_length=200, blank=True, default="")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"Onboarding {self.phone_number} ({self.status})"
 
 
 class Service(models.Model):
@@ -31,37 +106,45 @@ class Service(models.Model):
     duration_minutes = models.PositiveIntegerField(default=60)
     is_active = models.BooleanField(default=True)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.name} ({self.business.name})"
 
 
 class Appointment(models.Model):
     class Status(models.TextChoices):
+        RESERVED = "reserved", "Reserved"
         SCHEDULED = "scheduled", "מתוכנן"
-        CONFIRMED = "confirmed_by_client", "אושר ע\"י לקוח"
-        CANCELLED_CLIENT = "cancelled_by_client", "בוטל ע\"י לקוח"
-        CANCELLED_STAFF = "cancelled_by_staff", "בוטל ע\"י צוות"
+        CONFIRMED = "confirmed_by_client", 'אושר ע"י לקוח'
+        CANCELLATION_REQUESTED = "cancellation_requested", "בקשת ביטול (ממתין לצוות)"
+        CANCELLED_CLIENT = "cancelled_by_client", 'בוטל ע"י לקוח'
+        CANCELLED_STAFF = "cancelled_by_staff", 'בוטל ע"י צוות'
         COMPLETED = "completed", "הושלם"
         NO_SHOW = "no_show", "לא הגיע"
 
     business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="appointments")
-    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="appointments")
+
+    # Slot model: an appointment may exist without a client (reserved time).
+    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True, blank=True, related_name="appointments")
+
+    provider = models.ForeignKey(Provider, on_delete=models.SET_NULL, null=True, blank=True, related_name="appointments")
+    room = models.ForeignKey(Room, on_delete=models.SET_NULL, null=True, blank=True, related_name="appointments")
+
     service = models.ForeignKey(Service, on_delete=models.SET_NULL, null=True, blank=True)
+
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
-    status = models.CharField(
-        max_length=32,
-        choices=Status.choices,
-        default=Status.SCHEDULED,
-    )
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.SCHEDULED)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    
+    def __str__(self) -> str:
+        who = self.client.full_name if self.client_id else (self.provider.display_name if self.provider_id else "Slot")
+        return f"{who} @ {self.start_time:%Y-%m-%d %H:%M} ({self.business.name})"
 
     def save(self, *args, **kwargs):
         """Persist appointment and ensure default reminders exist on first save.
 
         This is a safety net (e.g., if signals are not loaded for any reason).
+        Reminders are only created for appointments that actually have a client.
         """
         is_new = self.pk is None
         prev_status = None
@@ -74,12 +157,17 @@ class Appointment(models.Model):
 
         super().save(*args, **kwargs)
 
-        # Create default reminders once
-        if is_new and self.status not in (
-            Appointment.Status.CANCELLED_CLIENT,
-            Appointment.Status.CANCELLED_STAFF,
-            Appointment.Status.COMPLETED,
-            Appointment.Status.NO_SHOW,
+        # Create default reminders once (only for appointments that have a client)
+        if (
+            is_new
+            and self.client_id is not None
+            and self.status
+            not in (
+                Appointment.Status.CANCELLED_CLIENT,
+                Appointment.Status.CANCELLED_STAFF,
+                Appointment.Status.COMPLETED,
+                Appointment.Status.NO_SHOW,
+            )
         ):
             from .reminders import ensure_reminders_for_appointment
 
@@ -98,8 +186,33 @@ class Appointment(models.Model):
                 skip_pending_reminders(self)
 
 
-def __str__(self):
-        return f"{self.client.full_name} @ {self.start_time} ({self.business.name})"
+class CancellationRequest(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    appointment = models.ForeignKey(Appointment, on_delete=models.CASCADE, related_name="cancellation_requests")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    reason = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"CancellationRequest({self.appointment_id}) {self.status}"
+
+
+class AuditEvent(models.Model):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="audit_events")
+    actor_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="audit_events")
+    action = models.CharField(max_length=100)
+    object_type = models.CharField(max_length=100, blank=True, default="")
+    object_id = models.CharField(max_length=100, blank=True, default="")
+    before = models.JSONField(null=True, blank=True)
+    after = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"{self.created_at:%Y-%m-%d %H:%M} {self.action}"
 
 
 class Reminder(models.Model):
@@ -122,22 +235,10 @@ class Reminder(models.Model):
     appointment = models.ForeignKey(Appointment, on_delete=models.CASCADE, related_name="reminders")
     scheduled_time = models.DateTimeField()
     sent_at = models.DateTimeField(blank=True, null=True)
-    status = models.CharField(
-        max_length=16,
-        choices=ReminderStatus.choices,
-        default=ReminderStatus.PENDING,
-    )
-    type = models.CharField(
-        max_length=32,
-        choices=ReminderType.choices,
-        default=ReminderType.PRIMARY_24H,
-    )
-    channel = models.CharField(
-        max_length=16,
-        choices=Channel.choices,
-        default=Channel.WHATSAPP,
-    )
+    status = models.CharField(max_length=16, choices=ReminderStatus.choices, default=ReminderStatus.PENDING)
+    type = models.CharField(max_length=32, choices=ReminderType.choices, default=ReminderType.PRIMARY_24H)
+    channel = models.CharField(max_length=16, choices=Channel.choices, default=Channel.WHATSAPP)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Reminder {self.type} for {self.appointment}"

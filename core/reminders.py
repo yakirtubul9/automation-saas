@@ -15,6 +15,10 @@ REMINDER_RULES = (
 
 def ensure_reminders_for_appointment(appt: Appointment) -> None:
     """Create the default reminders for an appointment (idempotent)."""
+    # Slots without a client should not generate reminders.
+    if appt.client_id is None:
+        return
+
     now = timezone.now()
 
     for reminder_type, lead in REMINDER_RULES:

@@ -15,7 +15,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--execute",
             action="store_true",
-            help="Actually mark reminders as SENT (otherwise dry-run print only).",
+            help="Actually send and mark reminders as SENT (otherwise dry-run print only).",
         )
         parser.add_argument(
             "--limit",
@@ -36,28 +36,35 @@ class Command(BaseCommand):
                 status=Reminder.ReminderStatus.PENDING,
                 scheduled_time__lte=now,
                 appointment__status__in=(Appointment.Status.SCHEDULED, Appointment.Status.CONFIRMED),
+                appointment__client__isnull=False,  # slots without client should never be sent
             )
             .order_by("scheduled_time")[:limit]
         )
 
-        if not qs:
+        reminders = list(qs)
+        if not reminders:
             self.stdout.write(self.style.SUCCESS("No due reminders found."))
             return
 
-        self.stdout.write(f"Found {len(qs)} due reminders (execute={execute}).\n")
+        self.stdout.write(f"Found {len(reminders)} due reminders (execute={execute}).\n")
 
-        for r in qs:
+        for r in reminders:
             appt = r.appointment
             client = appt.client
+            if client is None:
+                # Safety net; shouldn't happen because of the filter above
+                continue
 
             token_confirm = make_appointment_action_token(appointment_id=appt.id, action="confirm")
             token_cancel = make_appointment_action_token(appointment_id=appt.id, action="cancel")
 
             url_confirm = build_public_action_url(token=token_confirm, action="confirm")
             url_cancel = build_public_action_url(token=token_cancel, action="cancel")
+
             dt = timezone.localtime(appt.start_time)
             date_str = dt.strftime("%d/%m/%Y")
             time_str = dt.strftime("%H:%M")
+
             msg = (
                 f"REMINDER #{r.id} | {r.type} | scheduled={r.scheduled_time:%Y-%m-%d %H:%M}\n"
                 f"Client: {client.full_name} | phone={client.phone_number}\n"
@@ -67,18 +74,28 @@ class Command(BaseCommand):
             )
             self.stdout.write(msg)
 
+            provider_message_id = None
             if execute:
-                provider_id = provider.send(
+                provider_message_id = provider.send(
                     to=client.phone_number,
                     body=msg,  # נשאר בשביל log/debug; בתבנית לא חייבים להשתמש בו
                     template_params=[date_str, time_str, url_confirm, url_cancel],
                 )
-        r.status = Reminder.ReminderStatus.SENT
-        r.sent_at = timezone.now()
-        r.provider_message_id = provider_id  # אם יש לך שדה כזה
-        r.save(update_fields=["status", "sent_at", "provider_message_id"])
+
+                r.status = Reminder.ReminderStatus.SENT
+                r.sent_at = timezone.now()
+
+                # If you later add a provider_message_id field, this will store it.
+                if hasattr(r, "provider_message_id"):
+                    r.provider_message_id = provider_message_id
+
+                # Update only fields that exist
+                update_fields = ["status", "sent_at"]
+                if hasattr(r, "provider_message_id"):
+                    update_fields.append("provider_message_id")
+                r.save(update_fields=update_fields)
 
         if execute:
             self.stdout.write(self.style.SUCCESS("\nDone. Marked reminders as SENT."))
         else:
-            self.stdout.write(self.style.WARNING("\nDry-run complete. Use --execute to mark as SENT."))
+            self.stdout.write(self.style.WARNING("\nDry-run complete. Use --execute to send + mark as SENT."))

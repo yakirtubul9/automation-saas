@@ -97,25 +97,13 @@ WSGI_APPLICATION = "automation_saas.wsgi.application"
 # keep DB_SSL_REQUIRE=1 (default). For local dev you can set DB_SSL_REQUIRE=0.
 DB_SSL_REQUIRE = os.getenv("DB_SSL_REQUIRE", "1") == "1"
 
-# Avoid passing ssl_require for SQLite (it breaks local manage.py/migrations).
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-if DATABASE_URL:
-    DATABASES = {
-        "default": dj_database_url.config(
-            default=DATABASE_URL,
-            conn_max_age=int(os.getenv("DB_CONN_MAX_AGE", "600")),
-            ssl_require=DB_SSL_REQUIRE,
-        )
-    }
-else:
-    DATABASES = {
-        "default": dj_database_url.config(
-            default=f"sqlite:///{(BASE_DIR / 'db.sqlite3').as_posix()}",
-            conn_max_age=int(os.getenv("DB_CONN_MAX_AGE", "600")),
-            ssl_require=False,
-        )
-    }
+DATABASES = {
+    "default": dj_database_url.config(
+        default=f"sqlite:///{(BASE_DIR / 'db.sqlite3').as_posix()}",
+        conn_max_age=int(os.getenv("DB_CONN_MAX_AGE", "600")),
+        ssl_require=DB_SSL_REQUIRE,
+    )
+}
 
 
 AUTH_PASSWORD_VALIDATORS = [

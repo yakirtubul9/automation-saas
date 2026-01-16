@@ -8,7 +8,7 @@ from django.conf import settings
 from django.core import signing
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotFound
 
-from .models import Business, Appointment, Reminder
+from .models import Business, Appointment, Reminder, CancellationRequest
 
 
 def _get_or_create_business_for_user(user) -> Business:
@@ -126,7 +126,24 @@ def appointment_action_view(request, token: str, action: str):
     if appt.status in {Appointment.Status.CANCELLED_CLIENT, Appointment.Status.CANCELLED_STAFF}:
         return HttpResponse("התור כבר בוטל.", status=200)
 
+    # Business policy: if auto_cancel_cutoff_hours > 0 and we're inside the cutoff window,
+    # do not auto-cancel (create a cancellation request instead).
+    cutoff_hours = int(getattr(appt.business, "auto_cancel_cutoff_hours", 0) or 0)
+    now = timezone.now()
+    hours_until = (appt.start_time - now).total_seconds() / 3600.0
+
+    if cutoff_hours > 0 and hours_until < cutoff_hours:
+        # request cancellation approval
+        CancellationRequest.objects.create(appointment=appt)
+        appt.status = Appointment.Status.CANCELLATION_REQUESTED
+        appt.save(update_fields=["status"])
+        return HttpResponse(
+            "🕒 בקשת הביטול נשלחה לצוות לאישור. תקבל/י עדכון בהקדם.",
+            content_type="text/html; charset=utf-8",
+        )
+
+    # Auto cancel (anytime when cutoff_hours==0, or outside the cutoff window)
     appt.status = Appointment.Status.CANCELLED_CLIENT
     appt.save(update_fields=["status"])
-    # Pending reminders will be skipped by the signal.
+    # Pending reminders will be skipped by Appointment.save() transition.
     return HttpResponse("✅ התור בוטל בהצלחה.", content_type="text/html; charset=utf-8")

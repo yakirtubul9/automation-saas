@@ -305,6 +305,79 @@ class AppointmentChangeProposal(models.Model):
         return f"ChangeProposal({self.appointment_id}) {self.status}"
 
 
+class WaitlistEntry(models.Model):
+    """A client's request to be notified when a suitable slot becomes available."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        PAUSED = "paused", "Paused"
+        FULFILLED = "fulfilled", "Fulfilled"
+        CANCELLED = "cancelled", "Cancelled"
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="waitlist_entries")
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="waitlist_entries")
+    provider = models.ForeignKey(Provider, on_delete=models.SET_NULL, null=True, blank=True, related_name="waitlist_entries")
+    service = models.ForeignKey(Service, on_delete=models.SET_NULL, null=True, blank=True, related_name="waitlist_entries")
+
+    # Optional preference filters
+    preferred_weekdays = models.JSONField(default=list, blank=True)  # list[int] (Mon=0..Sun=6)
+    time_window_start = models.TimeField(null=True, blank=True)
+    time_window_end = models.TimeField(null=True, blank=True)
+    min_notice_hours = models.PositiveIntegerField(default=0)
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    notes = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="created_waitlist_entries")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["business", "status", "created_at"]),
+            models.Index(fields=["business", "provider", "service"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"WaitlistEntry({self.client_id}) {self.status}"
+
+
+class WaitlistOffer(models.Model):
+    """An offer sent to a waitlist entry for a specific available slot."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        DECLINED = "declined", "Declined"
+        EXPIRED = "expired", "Expired"
+        CANCELLED = "cancelled", "Cancelled"
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="waitlist_offers")
+    entry = models.ForeignKey(WaitlistEntry, on_delete=models.CASCADE, related_name="offers")
+    slot = models.ForeignKey(Appointment, on_delete=models.CASCADE, related_name="waitlist_offers")
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    sent_at = models.DateTimeField(null=True, blank=True)
+    sent_message_id = models.CharField(max_length=120, blank=True, default="")
+    send_error = models.TextField(blank=True, default="")
+
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.CharField(max_length=120, blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("entry", "slot")
+        indexes = [
+            models.Index(fields=["business", "status", "created_at"]),
+            models.Index(fields=["business", "expires_at"]),
+            models.Index(fields=["slot", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"WaitlistOffer({self.entry_id}->{self.slot_id}) {self.status}"
+
+
 class AuditEvent(models.Model):
     business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="audit_events")
     actor_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="audit_events")

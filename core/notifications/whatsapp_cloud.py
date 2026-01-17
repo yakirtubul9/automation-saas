@@ -61,7 +61,14 @@ class WhatsAppCloudProvider(NotificationProvider):
 
         self.base_url = f"https://graph.facebook.com/{self.graph_version}/{self.phone_number_id}/messages"
 
-    def send(self, *, to: str, body: str, template_params: Optional[Sequence[str]] = None) -> str:
+    def send(
+        self,
+        *,
+        to: str,
+        body: str,
+        template_params: Optional[Sequence[str]] = None,
+        template_name: Optional[str] = None,
+    ) -> str:
         to_norm = _normalize_phone(to, default_country_code=self.default_country_code)
         print(f"[WA DEBUG] to_raw={to} to_norm={to_norm} from_phone_number_id={self.phone_number_id}")
 
@@ -70,14 +77,20 @@ class WhatsAppCloudProvider(NotificationProvider):
             "Content-Type": "application/json",
         }
 
-        if self.template_name:
-            if (self.template_name or "").strip().lower() == "hello_world":
+        chosen_template = self.template_name if template_name is None else (template_name.strip() or None)
+
+        # template_name=="" is a deliberate escape hatch: force text mode even if env template exists.
+        if template_name == "":
+            chosen_template = None
+
+        if chosen_template:
+            if (chosen_template or "").strip().lower() == "hello_world":
                 payload = {
                     "messaging_product": "whatsapp",
                     "to": to_norm,
                     "type": "template",
                     "template": {
-                        "name": self.template_name,
+                        "name": chosen_template,
                         "language": {"code": self.template_lang},
                     },
                 }
@@ -90,7 +103,7 @@ class WhatsAppCloudProvider(NotificationProvider):
                     "to": to_norm,
                     "type": "template",
                     "template": {
-                        "name": self.template_name,
+                        "name": chosen_template,
                         "language": {"code": self.template_lang},
                         "components": [
                             {

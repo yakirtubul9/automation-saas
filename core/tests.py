@@ -26,6 +26,175 @@ from core.models import (
 from core.views import build_public_action_url, make_appointment_action_token
 
 
+class WaitlistFlowTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.staff_user = User.objects.create_user(username="wl_staff", password="pass")
+
+        self.business = Business.objects.create(owner=self.staff_user, name="Clinic WL")
+        BusinessMembership.objects.create(business=self.business, user=self.staff_user, role=BusinessMembership.Role.STAFF)
+
+        self.spec = Specialty.objects.create(business=self.business, name="Physio")
+        self.room = Room.objects.create(business=self.business, name="Room WL")
+        self.room.specialties.add(self.spec)
+
+        self.provider = Provider.objects.create(business=self.business, display_name="Dr WL", specialty=self.spec, whatsapp_number="+972500000001")
+        self.service = Service.objects.create(business=self.business, name="Consult", specialty=self.spec, duration_minutes=60)
+
+        self.client_cancel = Client.objects.create(business=self.business, full_name="A", phone_number="+972500000010")
+        self.client_wait = Client.objects.create(business=self.business, full_name="B", phone_number="+972500000011")
+
+        start = (timezone.now() + timedelta(days=2)).replace(minute=0, second=0, microsecond=0)
+        self.appt = Appointment.objects.create(
+            business=self.business,
+            provider=self.provider,
+            room=self.room,
+            client=self.client_cancel,
+            service=self.service,
+            start_time=start,
+            end_time=start + timedelta(minutes=60),
+            status=Appointment.Status.SCHEDULED,
+        )
+
+    def test_cancel_creates_freed_slot_and_offer(self):
+        from core.models import WaitlistEntry, WaitlistOffer
+
+        WaitlistEntry.objects.create(
+            business=self.business,
+            client=self.client_wait,
+            provider=self.provider,
+            service=self.service,
+            preferred_weekdays=[],
+            min_notice_hours=0,
+            status=WaitlistEntry.Status.ACTIVE,
+        )
+
+        token = make_appointment_action_token(appointment_id=self.appt.id, action="cancel")
+        url = build_public_action_url(token=token, action="cancel")
+
+        r = self.client.get(url)
+        self.assertEqual(r.status_code, 200)
+
+        self.appt.refresh_from_db()
+        self.assertEqual(self.appt.status, Appointment.Status.CANCELLED_CLIENT)
+
+        freed = Appointment.objects.filter(
+            business=self.business,
+            provider=self.provider,
+            room=self.room,
+            start_time=self.appt.start_time,
+            end_time=self.appt.end_time,
+            client__isnull=True,
+            status=getattr(Appointment.Status, "RESERVED", "reserved"),
+        ).first()
+        self.assertIsNotNone(freed)
+
+        offer = WaitlistOffer.objects.filter(slot=freed).first()
+        self.assertIsNotNone(offer)
+        self.assertEqual(offer.status, WaitlistOffer.Status.PENDING)
+
+    def test_offer_accept_assigns_slot_and_cancels_other_offers(self):
+        from core.models import WaitlistEntry, WaitlistOffer
+        from core.waitlist import create_offers_for_slot
+
+        e1 = WaitlistEntry.objects.create(
+            business=self.business,
+            client=self.client_wait,
+            provider=self.provider,
+            service=self.service,
+            status=WaitlistEntry.Status.ACTIVE,
+        )
+        other_client = Client.objects.create(business=self.business, full_name="C", phone_number="+972500000012")
+        e2 = WaitlistEntry.objects.create(
+            business=self.business,
+            client=other_client,
+            provider=self.provider,
+            service=self.service,
+            status=WaitlistEntry.Status.ACTIVE,
+        )
+
+        freed_slot = Appointment.objects.create(
+            business=self.business,
+            provider=self.provider,
+            room=self.room,
+            client=None,
+            service=self.service,
+            start_time=self.appt.start_time,
+            end_time=self.appt.end_time,
+            status=getattr(Appointment.Status, "RESERVED", "reserved"),
+        )
+
+        created = create_offers_for_slot(slot=freed_slot, max_offers=2, ttl_minutes=60)
+        self.assertEqual(created, 2)
+
+        offer1 = WaitlistOffer.objects.get(entry=e1, slot=freed_slot)
+        offer2 = WaitlistOffer.objects.get(entry=e2, slot=freed_slot)
+
+        from core.views import make_waitlist_offer_action_token, build_public_waitlist_offer_action_url
+        token1 = make_waitlist_offer_action_token(offer_id=offer1.id, action="accept")
+        url1 = build_public_waitlist_offer_action_url(token=token1, action="accept")
+
+        # CSRF protected flow
+        from django.test import Client as DjangoClient
+        c = DjangoClient(enforce_csrf_checks=True)
+        resp_get = c.get(url1)
+        self.assertEqual(resp_get.status_code, 200)
+        self.assertIn("csrfmiddlewaretoken", resp_get.content.decode("utf-8"))
+
+        self.assertIn("csrftoken", resp_get.cookies)
+        csrf = resp_get.cookies["csrftoken"].value
+        resp_post = c.post(url1, HTTP_X_CSRFTOKEN=csrf)
+        self.assertEqual(resp_post.status_code, 200)
+
+        freed_slot.refresh_from_db()
+        self.assertEqual(freed_slot.status, Appointment.Status.SCHEDULED)
+        self.assertEqual(freed_slot.client_id, self.client_wait.id)
+
+        offer1.refresh_from_db()
+        offer2.refresh_from_db()
+        self.assertEqual(offer1.status, WaitlistOffer.Status.ACCEPTED)
+        self.assertEqual(offer2.status, WaitlistOffer.Status.CANCELLED)
+
+    def test_expired_offer_returns_gone_and_updates_status(self):
+        from core.models import WaitlistEntry, WaitlistOffer
+        from core.views import make_waitlist_offer_action_token, build_public_waitlist_offer_action_url
+
+        freed_slot = Appointment.objects.create(
+            business=self.business,
+            provider=self.provider,
+            room=self.room,
+            client=None,
+            service=self.service,
+            start_time=self.appt.start_time,
+            end_time=self.appt.end_time,
+            status=getattr(Appointment.Status, "RESERVED", "reserved"),
+        )
+
+        entry = WaitlistEntry.objects.create(
+            business=self.business,
+            client=self.client_wait,
+            provider=self.provider,
+            service=self.service,
+            status=WaitlistEntry.Status.ACTIVE,
+        )
+        offer = WaitlistOffer.objects.create(
+            business=self.business,
+            entry=entry,
+            slot=freed_slot,
+            status=WaitlistOffer.Status.PENDING,
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+
+        token = make_waitlist_offer_action_token(offer_id=offer.id, action="accept")
+        url = build_public_waitlist_offer_action_url(token=token, action="accept")
+        r = self.client.get(url)
+        self.assertEqual(r.status_code, 410)
+
+        offer.refresh_from_db()
+        self.assertEqual(offer.status, WaitlistOffer.Status.EXPIRED)
+
+
+
 class DashboardTests(TestCase):
     def setUp(self):
         User = get_user_model()

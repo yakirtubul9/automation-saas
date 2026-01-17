@@ -23,10 +23,12 @@ urlpatterns = [
     path("api/availability/", core_api.availability_view, name="availability"),
     path("api/assign-client/", core_api.assign_client_view, name="assign_client"),
     path("api/room-blocks/", core_api.room_block_view, name="room_blocks"),
+    path("api/waitlist/", core_api.waitlist_view, name="waitlist"),
     path("api/change-proposals/", core_api.change_proposal_create_view, name="change_proposal_create"),
     path("api/change-proposals/<int:proposal_id>/cancel/", core_api.change_proposal_cancel_view, name="change_proposal_cancel"),
     path("api/change-proposals/<int:proposal_id>/resend/", core_api.change_proposal_resend_view, name="change_proposal_resend"),
     path("p/<str:token>/<str:action>/", core_views.change_proposal_action_view, name="change_proposal_action"),
+    path("w/<str:token>/<str:action>/", core_views.waitlist_offer_action_view, name="waitlist_offer_action"),
 ]
 
 

@@ -13,7 +13,19 @@ from django.http import HttpRequest, JsonResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from .models import Appointment, AuditEvent, Business, BusinessMembership, Client, Provider, Room, RoomBlock, Service, AppointmentChangeProposal
+from .models import (
+    Appointment,
+    AppointmentChangeProposal,
+    AuditEvent,
+    Business,
+    BusinessMembership,
+    Client,
+    Provider,
+    Room,
+    RoomBlock,
+    Service,
+    WaitlistEntry,
+)
 from .notifications import get_provider
 
 
@@ -1010,6 +1022,228 @@ def room_block_view(request: HttpRequest) -> JsonResponse:
     return _json_error(405, "method_not_allowed", "Use GET or POST")
 
 
+# ============================
+# Stage 4 — Waitlist (API-first)
+# ============================
+
+
+@dataclass(frozen=True)
+class WaitlistEntryInput:
+    client_id: int
+    provider_id: Optional[int]
+    service_id: Optional[int]
+    preferred_weekdays: list[int]
+    time_window_start: Optional[str]
+    time_window_end: Optional[str]
+    min_notice_hours: int
+    notes: str
+
+
+def _parse_waitlist_entry_input(request: HttpRequest) -> WaitlistEntryInput | JsonResponse:
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        return _json_error(400, "bad_json", "Body must be valid JSON")
+
+    client_id = body.get("client_id")
+    if client_id is None:
+        return _json_error(400, "missing_fields", "client_id is required")
+    try:
+        client_id_int = int(client_id)
+    except (TypeError, ValueError):
+        return _json_error(400, "bad_client_id", "client_id must be an integer")
+
+    provider_id = body.get("provider_id")
+    provider_id_int: Optional[int] = None
+    if provider_id is not None and provider_id != "":
+        try:
+            provider_id_int = int(provider_id)
+        except (TypeError, ValueError):
+            return _json_error(400, "bad_provider_id", "provider_id must be an integer")
+
+    service_id = body.get("service_id")
+    service_id_int: Optional[int] = None
+    if service_id is not None and service_id != "":
+        try:
+            service_id_int = int(service_id)
+        except (TypeError, ValueError):
+            return _json_error(400, "bad_service_id", "service_id must be an integer")
+
+    weekdays_raw = body.get("preferred_weekdays") or []
+    weekdays: list[int] = []
+    if isinstance(weekdays_raw, list):
+        for x in weekdays_raw:
+            try:
+                xi = int(x)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= xi <= 6:
+                weekdays.append(xi)
+
+    time_start = body.get("time_window_start")
+    time_end = body.get("time_window_end")
+    time_start_s = str(time_start).strip() if time_start is not None else None
+    time_end_s = str(time_end).strip() if time_end is not None else None
+    if time_start_s == "":
+        time_start_s = None
+    if time_end_s == "":
+        time_end_s = None
+
+    min_notice = body.get("min_notice_hours") or 0
+    try:
+        min_notice_int = int(min_notice)
+    except (TypeError, ValueError):
+        return _json_error(400, "bad_min_notice_hours", "min_notice_hours must be an integer")
+    if min_notice_int < 0:
+        min_notice_int = 0
+
+    notes = str(body.get("notes") or "").strip()
+
+    return WaitlistEntryInput(
+        client_id=client_id_int,
+        provider_id=provider_id_int,
+        service_id=service_id_int,
+        preferred_weekdays=weekdays,
+        time_window_start=time_start_s,
+        time_window_end=time_end_s,
+        min_notice_hours=min_notice_int,
+        notes=notes,
+    )
+
+
+def _parse_time_optional(value: Optional[str]) -> Optional[dtime]:
+    if not value:
+        return None
+    try:
+        parts = str(value).strip().split(":")
+        if len(parts) < 2:
+            return None
+        h = int(parts[0])
+        m = int(parts[1])
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            return None
+        return dtime(hour=h, minute=m)
+    except Exception:
+        return None
+
+
+@login_required
+def waitlist_view(request: HttpRequest) -> JsonResponse:
+    """Create/list waitlist entries.
+
+    POST JSON:
+      {
+        "client_id": 123,
+        "service_id": 456,          # optional
+        "provider_id": 789,         # optional
+        "preferred_weekdays": [0,2],# optional (Mon=0..Sun=6)
+        "time_window_start": "10:00",# optional
+        "time_window_end": "14:00",  # optional
+        "min_notice_hours": 24,     # optional
+        "notes": "..."             # optional
+      }
+
+    GET:
+      returns up to 200 entries.
+
+    RBAC: owner/staff only (MVP)
+    """
+    business = _get_business_for_user(request.user)
+    if not business:
+        return _json_error(403, "no_business", "No business context for this user")
+
+    if not _require_staff_or_owner(request.user, business):
+        return _json_error(403, "forbidden", "Only owner/staff can manage waitlist")
+
+    if request.method == "GET":
+        qs = (
+            WaitlistEntry.objects
+            .filter(business=business)
+            .select_related("client", "provider", "service")
+            .order_by("-created_at")
+        )
+        entries = []
+        for e in qs[:200]:
+            entries.append(
+                {
+                    "id": e.id,
+                    "client_id": e.client_id,
+                    "provider_id": e.provider_id,
+                    "service_id": e.service_id,
+                    "preferred_weekdays": e.preferred_weekdays or [],
+                    "time_window_start": e.time_window_start.isoformat() if e.time_window_start else None,
+                    "time_window_end": e.time_window_end.isoformat() if e.time_window_end else None,
+                    "min_notice_hours": e.min_notice_hours,
+                    "status": e.status,
+                    "notes": e.notes,
+                    "created_at": e.created_at.isoformat(),
+                }
+            )
+        return JsonResponse({"ok": True, "entries": entries})
+
+    if request.method != "POST":
+        return _json_error(405, "method_not_allowed", "Use GET or POST")
+
+    parsed = _parse_waitlist_entry_input(request)
+    if isinstance(parsed, JsonResponse):
+        return parsed
+
+    client = Client.objects.filter(pk=parsed.client_id, business=business, is_active=True).first()
+    if not client:
+        return _json_error(404, "client_not_found", "Client not found")
+
+    provider = None
+    if parsed.provider_id is not None:
+        provider = Provider.objects.filter(pk=parsed.provider_id, business=business, is_active=True).first()
+        if not provider:
+            return _json_error(404, "provider_not_found", "Provider not found")
+
+    service = None
+    if parsed.service_id is not None:
+        service = Service.objects.filter(pk=parsed.service_id, business=business, is_active=True).first()
+        if not service:
+            return _json_error(404, "service_not_found", "Service not found")
+
+    tws = _parse_time_optional(parsed.time_window_start)
+    twe = _parse_time_optional(parsed.time_window_end)
+    if (parsed.time_window_start or parsed.time_window_end) and (tws is None or twe is None):
+        return _json_error(400, "bad_time_window", "time_window_start/end must be HH:MM")
+
+    entry = WaitlistEntry.objects.create(
+        business=business,
+        client=client,
+        provider=provider,
+        service=service,
+        preferred_weekdays=parsed.preferred_weekdays,
+        time_window_start=tws,
+        time_window_end=twe,
+        min_notice_hours=parsed.min_notice_hours,
+        status=WaitlistEntry.Status.ACTIVE,
+        notes=parsed.notes,
+        created_by=request.user,
+    )
+
+    _safe_create_audit_event(
+        business=business,
+        actor_user=request.user,
+        action="waitlist_entry_created",
+        object_type="WaitlistEntry",
+        object_id=str(entry.id),
+        before=None,
+        after={
+            "client_id": entry.client_id,
+            "provider_id": entry.provider_id,
+            "service_id": entry.service_id,
+            "preferred_weekdays": entry.preferred_weekdays,
+            "time_window_start": entry.time_window_start.isoformat() if entry.time_window_start else None,
+            "time_window_end": entry.time_window_end.isoformat() if entry.time_window_end else None,
+            "min_notice_hours": entry.min_notice_hours,
+        },
+    )
+
+    return JsonResponse({"ok": True, "entry_id": entry.id})
+
+
 @login_required
 def availability_view(request: HttpRequest) -> JsonResponse:
     """List upcoming free slots (reserved appointments without a client).
@@ -1256,6 +1490,15 @@ def assign_client_view(request: HttpRequest) -> JsonResponse:
         from .reminders import ensure_reminders_for_appointment
 
         ensure_reminders_for_appointment(slot)
+
+        # Stage 4 (Waitlist): slot is no longer available; cancel any pending offers for it.
+        try:
+            from .models import WaitlistOffer
+            now = timezone.now()
+            (WaitlistOffer.objects.filter(slot_id=slot.id, status=WaitlistOffer.Status.PENDING)
+             .update(status=WaitlistOffer.Status.CANCELLED, decided_at=now, decision_note="slot_assigned"))
+        except Exception:
+            pass
 
         after = {
             "id": slot.id,
@@ -1716,7 +1959,7 @@ def change_proposal_create_view(request: HttpRequest) -> JsonResponse:
             f"לדחייה: {reject_url}\n"
         )
         try:
-            msg_id = get_provider().send(to=provider_number, body=body)
+            msg_id = get_provider().send(to=provider_number, body=body, template_name="")
             proposal.sent_at = timezone.now()
             proposal.sent_message_id = msg_id
             proposal.save(update_fields=["sent_at", "sent_message_id"])
@@ -1860,7 +2103,7 @@ def change_proposal_resend_view(request: HttpRequest, proposal_id: int) -> JsonR
     )
 
     try:
-        msg_id = get_provider().send(to=provider_number, body=body)
+        msg_id = get_provider().send(to=provider_number, body=body, template_name="")
         proposal.sent_at = timezone.now()
         proposal.sent_message_id = msg_id
         proposal.send_error = ""

@@ -7,6 +7,7 @@ from django.utils import timezone
 from django.conf import settings
 from django.core import signing
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotFound
+from django.middleware.csrf import get_token
 
 from .models import Business, Appointment, Reminder, CancellationRequest, AppointmentChangeProposal
 
@@ -146,6 +147,37 @@ def appointment_action_view(request, token: str, action: str):
     appt.status = Appointment.Status.CANCELLED_CLIENT
     appt.save(update_fields=["status"])
     # Pending reminders will be skipped by Appointment.save() transition.
+
+    # Stage 4 (Waitlist): create a new available slot and try to fill it.
+    # We only do this on the first successful cancellation (the branch above is idempotent).
+    try:
+        existing = Appointment.objects.filter(
+            business=appt.business,
+            provider_id=appt.provider_id,
+            room_id=appt.room_id,
+            start_time=appt.start_time,
+            end_time=appt.end_time,
+            status=Appointment.Status.RESERVED,
+            client__isnull=True,
+        ).first()
+        if existing is None:
+            freed_slot = Appointment.objects.create(
+                business=appt.business,
+                client=None,
+                provider=appt.provider,
+                room=appt.room,
+                service=appt.service,
+                start_time=appt.start_time,
+                end_time=appt.end_time,
+                status=Appointment.Status.RESERVED,
+            )
+            from .waitlist import create_offers_for_slot
+
+            create_offers_for_slot(slot=freed_slot)
+    except Exception:
+        # Waitlist is best-effort; cancellation must always succeed.
+        pass
+
     return HttpResponse("✅ התור בוטל בהצלחה.", content_type="text/html; charset=utf-8")
 
 
@@ -340,3 +372,113 @@ def change_proposal_action_view(request, token: str, action: str):
         proposal.save(update_fields=["status", "decided_at", "decision_note"])
 
         return HttpResponse("אושר. התור עודכן בהצלחה.", content_type="text/html; charset=utf-8")
+
+
+# --- Public waitlist offer links (Stage 4) ---
+
+_WAITLIST_OFFER_ACTION_SALT = "core.waitlist_offer.action"
+
+
+def make_waitlist_offer_action_token(*, offer_id: int, action: str) -> str:
+    payload = {"oid": int(offer_id), "act": str(action)}
+    return signing.dumps(payload, salt=_WAITLIST_OFFER_ACTION_SALT, compress=True)
+
+
+def build_public_waitlist_offer_action_url(*, token: str, action: str) -> str:
+    base = getattr(settings, "SITE_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+    return f"{base}/w/{token}/{action}/"
+
+
+def waitlist_offer_action_view(request, token: str, action: str):
+    """Public endpoint for a waitlist offer: accept / decline.
+
+    GET  -> show a minimal confirmation page
+    POST -> perform the action if still valid
+    """
+    action = (action or "").strip().lower()
+    if action not in {"accept", "decline"}:
+        return HttpResponseBadRequest("Invalid action")
+
+    max_age = int(getattr(settings, "WAITLIST_OFFER_ACTION_LINK_MAX_AGE_SECONDS", 7 * 24 * 60 * 60))
+
+    try:
+        data = signing.loads(token, salt=_WAITLIST_OFFER_ACTION_SALT, max_age=max_age)
+    except signing.SignatureExpired:
+        return HttpResponse("הקישור פג תוקף.", status=410)
+    except signing.BadSignature:
+        return HttpResponseBadRequest("קישור לא תקין.")
+
+    if data.get("act") != action:
+        return HttpResponseBadRequest("קישור לא תואם לפעולה.")
+
+    offer_id = data.get("oid")
+    if not offer_id:
+        return HttpResponseBadRequest("קישור לא תקין.")
+
+    from .models import WaitlistOffer
+
+    offer = (
+        WaitlistOffer.objects
+        .select_related("entry", "entry__client", "slot", "slot__service", "slot__provider")
+        .filter(pk=offer_id)
+        .first()
+    )
+    if not offer:
+        return HttpResponseNotFound("ההצעה לא נמצאה.")
+
+    # If the offer itself expired (independent of the signed token expiry),
+    # we treat it as gone and persist the status for audit/consistency.
+    now = timezone.now()
+    if offer.status == WaitlistOffer.Status.PENDING and offer.expires_at and offer.expires_at <= now:
+        offer.status = WaitlistOffer.Status.EXPIRED
+        offer.decided_at = now
+        offer.decision_note = "expired"
+        offer.save(update_fields=["status", "decided_at", "decision_note"])
+        return HttpResponse("ההצעה פג תוקף.", status=410)
+
+    if offer.status == WaitlistOffer.Status.EXPIRED:
+        return HttpResponse("ההצעה פג תוקף.", status=410)
+
+    # Render confirmation page
+    if request.method == "GET":
+        client_name = offer.entry.client.full_name if offer.entry_id else ""
+        service_name = offer.slot.service.name if getattr(offer.slot, "service_id", None) else ""
+        provider_name = offer.slot.provider.display_name if getattr(offer.slot, "provider_id", None) else ""
+        dt = timezone.localtime(offer.slot.start_time)
+        when = dt.strftime("%Y-%m-%d %H:%M")
+        csrf = get_token(request)
+        button = "מאשר" if action == "accept" else "דוחה"
+        html = f"""
+        <html><body style='font-family: Arial, sans-serif; direction: rtl;'>
+          <h2>הצעת תור שהתפנה</h2>
+          <p><b>ללקוח:</b> {client_name}</p>
+          <p><b>שירות:</b> {service_name or '-'} </p>
+          <p><b>רופא:</b> {provider_name or '-'} </p>
+          <p><b>מועד:</b> {when}</p>
+          <form method='post'>
+            <input type='hidden' name='csrfmiddlewaretoken' value='{csrf}' />
+            <button type='submit' style='padding:10px 16px;'>{button}</button>
+          </form>
+        </body></html>
+        """
+        return HttpResponse(html, content_type="text/html; charset=utf-8")
+
+    # POST -> execute action
+    from .waitlist import accept_offer, decline_offer
+
+    try:
+        if action == "decline":
+            ok, message = decline_offer(offer_id=int(offer_id))
+        else:
+            ok, message = accept_offer(offer_id=int(offer_id))
+    except Exception:
+        ok, message = False, "שגיאה פנימית."
+
+    if ok:
+        status = 200
+    else:
+        status = 410 if "פג תוקף" in (message or "") else 409
+    return HttpResponse(message, status=status, content_type="text/html; charset=utf-8")
+
+
+

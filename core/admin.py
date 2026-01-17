@@ -1,8 +1,22 @@
 from django.contrib import admin
 from django.utils import timezone
 
-from .models import (Business, BusinessMembership, Client, ClientOnboarding, Service, Appointment, Reminder,
-                     Specialty, Room, Provider, CancellationRequest, AuditEvent)
+from .models import (
+    Appointment,
+    AppointmentChangeProposal,
+    AuditEvent,
+    Business,
+    BusinessMembership,
+    CancellationRequest,
+    Client,
+    ClientOnboarding,
+    Provider,
+    Reminder,
+    Room,
+    RoomBlock,
+    Service,
+    Specialty,
+)
 
 
 def mark_reminders_as_sent(modeladmin, request, queryset):
@@ -31,7 +45,7 @@ class ClientAdmin(admin.ModelAdmin):
 
 @admin.register(Service)
 class ServiceAdmin(admin.ModelAdmin):
-    list_display = ("name", "business", "duration_minutes", "is_active")
+    list_display = ("name", "business", "specialty", "duration_minutes", "is_active")
     list_filter = ("business", "is_active")
     search_fields = ("name",)
 
@@ -98,3 +112,30 @@ class AuditEventAdmin(admin.ModelAdmin):
     list_display = ("business", "created_at", "action", "actor_user", "object_type", "object_id")
     list_filter = ("business", "action")
     search_fields = ("action", "object_type", "object_id", "actor_user__username")
+
+
+
+
+@admin.register(AppointmentChangeProposal)
+class AppointmentChangeProposalAdmin(admin.ModelAdmin):
+    list_display = (
+        "business",
+        "appointment",
+        "status",
+        "sent_at",
+        "last_attempted_at",
+        "last_error_code",
+        "original_room",
+        "proposed_room",
+        "original_start_time",
+        "proposed_start_time",
+        "expires_at",
+        "created_at",
+    )
+    list_filter = ("business", "status")
+    search_fields = ("appointment__id", "reason")
+@admin.register(RoomBlock)
+class RoomBlockAdmin(admin.ModelAdmin):
+    list_display = ("business", "room", "start_time", "end_time", "reason", "is_active", "created_at")
+    list_filter = ("business", "is_active", "room")
+    search_fields = ("room__name", "reason")

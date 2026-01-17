@@ -8,7 +8,7 @@ from django.conf import settings
 from django.core import signing
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotFound
 
-from .models import Business, Appointment, Reminder, CancellationRequest
+from .models import Business, Appointment, Reminder, CancellationRequest, AppointmentChangeProposal
 
 
 def _get_or_create_business_for_user(user) -> Business:
@@ -147,3 +147,196 @@ def appointment_action_view(request, token: str, action: str):
     appt.save(update_fields=["status"])
     # Pending reminders will be skipped by Appointment.save() transition.
     return HttpResponse("✅ התור בוטל בהצלחה.", content_type="text/html; charset=utf-8")
+
+
+# --- Public clinic-change approval links (Stage 3) ---
+
+_PROPOSAL_ACTION_SALT = "core.change_proposal.action"
+
+
+def make_change_proposal_action_token(*, proposal_id: int, action: str) -> str:
+    """Create a signed, time-limited token for a public change-proposal action."""
+    payload = {"pid": int(proposal_id), "act": str(action)}
+    return signing.dumps(payload, salt=_PROPOSAL_ACTION_SALT, compress=True)
+
+
+def build_public_proposal_action_url(*, token: str, action: str) -> str:
+    base = getattr(settings, "SITE_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+    return f"{base}/p/{token}/{action}/"
+
+
+def change_proposal_action_view(request, token: str, action: str):
+    """Public endpoint to approve/reject a clinic change proposal.
+
+    Security model (MVP): the signed token is the authorization.
+
+    GET  -> show a minimal confirmation page
+    POST -> perform the action if still valid
+    """
+    action = (action or "").strip().lower()
+    if action not in {"approve", "reject"}:
+        return HttpResponseBadRequest("Invalid action")
+
+    max_age = int(getattr(settings, "CHANGE_PROPOSAL_ACTION_LINK_MAX_AGE_SECONDS", 7 * 24 * 60 * 60))
+
+    try:
+        data = signing.loads(token, salt=_PROPOSAL_ACTION_SALT, max_age=max_age)
+    except signing.SignatureExpired:
+        return HttpResponse("הקישור פג תוקף.", status=410)
+    except signing.BadSignature:
+        return HttpResponseBadRequest("קישור לא תקין.")
+
+    if data.get("act") != action:
+        return HttpResponseBadRequest("קישור לא תואם לפעולה.")
+
+    proposal_id = data.get("pid")
+    try:
+        proposal = (
+            AppointmentChangeProposal.objects
+            .select_related("appointment", "appointment__provider", "appointment__room", "proposed_room")
+            .get(pk=proposal_id)
+        )
+    except AppointmentChangeProposal.DoesNotExist:
+        return HttpResponseNotFound("הבקשה לא נמצאה.")
+
+    # Expiry/status gate
+    now = timezone.now()
+    if proposal.status != AppointmentChangeProposal.Status.PENDING:
+        return HttpResponse("הבקשה כבר טופלה.", status=409)
+
+    if proposal.expires_at and proposal.expires_at <= now:
+        proposal.status = AppointmentChangeProposal.Status.EXPIRED
+        proposal.decided_at = now
+        proposal.decision_note = "expired"
+        proposal.save(update_fields=["status", "decided_at", "decision_note"])
+        return HttpResponse("הבקשה פג תוקף.", status=410)
+
+    appt = proposal.appointment
+
+    # Render confirmation page
+    if request.method == "GET":
+        provider_name = appt.provider.display_name if appt.provider_id else ""
+        orig_room = proposal.original_room.name if proposal.original_room_id else "-"
+        new_room = proposal.proposed_room.name if proposal.proposed_room_id else "-"
+        html = f"""
+        <html><body style='font-family: Arial, sans-serif; direction: rtl;'>
+          <h2>בקשת שינוי תור</h2>
+          <p><b>רופא:</b> {provider_name}</p>
+          <p><b>מ:</b> {proposal.original_start_time:%Y-%m-%d %H:%M} עד {proposal.original_end_time:%H:%M} (חדר: {orig_room})</p>
+          <p><b>ל:</b> {proposal.proposed_start_time:%Y-%m-%d %H:%M} עד {proposal.proposed_end_time:%H:%M} (חדר: {new_room})</p>
+          <p><b>סיבה:</b> {proposal.reason or '-'} </p>
+          <form method='post'>
+            <button type='submit' style='padding:10px 16px;'>""" + ("מאשר" if action == "approve" else "דוחה") + """</button>
+          </form>
+        </body></html>
+        """
+        return HttpResponse(html, content_type="text/html; charset=utf-8")
+
+    # POST -> execute action
+    from django.db import transaction
+    from . import api as core_api
+
+    with transaction.atomic():
+        proposal = (
+            AppointmentChangeProposal.objects
+            .select_for_update()
+            .select_related("appointment", "appointment__provider", "appointment__room", "proposed_room")
+            .get(pk=proposal.id)
+        )
+
+        if proposal.status != AppointmentChangeProposal.Status.PENDING:
+            return HttpResponse("הבקשה כבר טופלה.", status=409)
+
+        now = timezone.now()
+        if proposal.expires_at and proposal.expires_at <= now:
+            proposal.status = AppointmentChangeProposal.Status.EXPIRED
+            proposal.decided_at = now
+            proposal.decision_note = "expired"
+            proposal.save(update_fields=["status", "decided_at", "decision_note"])
+            return HttpResponse("הבקשה פג תוקף.", status=410)
+
+        appt = Appointment.objects.select_for_update().select_related("provider", "room", "business").get(pk=proposal.appointment_id)
+
+        # Stale proposal protection: appointment changed since proposal creation
+        if (
+            appt.start_time != proposal.original_start_time
+            or appt.end_time != proposal.original_end_time
+            or appt.room_id != proposal.original_room_id
+        ):
+            proposal.status = AppointmentChangeProposal.Status.REJECTED
+            proposal.decided_at = now
+            proposal.decision_note = "stale"
+            proposal.save(update_fields=["status", "decided_at", "decision_note"])
+            core_api._safe_create_audit_event(
+                business=proposal.business,
+                actor_user=None,
+                action="change_proposal_stale_rejected",
+                object_type="AppointmentChangeProposal",
+                object_id=str(proposal.id),
+                before={"appointment": appt.id},
+                after={"status": proposal.status, "note": "stale"},
+            )
+            return HttpResponse("הבקשה כבר לא רלוונטית (התור השתנה).", status=409)
+
+        if action == "reject":
+            proposal.status = AppointmentChangeProposal.Status.REJECTED
+            proposal.decided_at = now
+            proposal.decision_note = "rejected_by_provider"
+            proposal.save(update_fields=["status", "decided_at", "decision_note"])
+            core_api._safe_create_audit_event(
+                business=proposal.business,
+                actor_user=None,
+                action="change_proposal_rejected",
+                object_type="AppointmentChangeProposal",
+                object_id=str(proposal.id),
+                before={
+                    "appointment": appt.id,
+                    "room_id": appt.room_id,
+                    "start_time": appt.start_time.isoformat(),
+                    "end_time": appt.end_time.isoformat(),
+                },
+                after={"status": proposal.status},
+            )
+            return HttpResponse("דחית את הבקשה. תודה.", content_type="text/html; charset=utf-8")
+
+        # approve
+        ok, error_message, alternatives = core_api._validate_and_apply_appointment_change(
+            proposal=proposal,
+            appointment=appt,
+            actor_user=None,
+        )
+        if not ok:
+            # Keep proposal pending so staff can update/create a new one.
+            proposal.last_error_code = "approve_validation_failed"
+            proposal.last_error_message = error_message
+            proposal.last_error_payload = {"alternatives": alternatives}
+            proposal.last_attempted_at = now
+            proposal.save(update_fields=["last_error_code", "last_error_message", "last_error_payload", "last_attempted_at"])
+
+            core_api._safe_create_audit_event(
+                business=proposal.business,
+                actor_user=None,
+                action="change_proposal_approve_failed",
+                object_type="AppointmentChangeProposal",
+                object_id=str(proposal.id),
+                before={"status": proposal.status},
+                after={"status": proposal.status, "error": error_message},
+            )
+
+            alt_html = ""
+            if alternatives:
+                alt_html = "<p><b>חלופות אפשריות:</b></p><ul>" + "".join(
+                    f"<li>{a.get('start_time','')} (room_id={a.get('room_id')})</li>" for a in alternatives
+                ) + "</ul>"
+            return HttpResponse(
+                f"לא ניתן לאשר כרגע: {error_message}" + alt_html,
+                status=409,
+                content_type="text/html; charset=utf-8",
+            )
+
+        proposal.status = AppointmentChangeProposal.Status.APPROVED
+        proposal.decided_at = now
+        proposal.decision_note = "approved_by_provider"
+        proposal.save(update_fields=["status", "decided_at", "decision_note"])
+
+        return HttpResponse("אושר. התור עודכן בהצלחה.", content_type="text/html; charset=utf-8")

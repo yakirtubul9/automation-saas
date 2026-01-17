@@ -40,6 +40,36 @@ class Room(models.Model):
         return f"{self.name} ({self.business.name})"
 
 
+class RoomBlock(models.Model):
+    """Hard block on a room's availability (maintenance, closure, etc.).
+
+    Blocks are treated as conflicts for any slot/appointment creation.
+    """
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="room_blocks")
+    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="blocks")
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField()
+    reason = models.CharField(max_length=255, blank=True, default="")
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_room_blocks",
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["business", "room", "start_time", "end_time"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Block {self.room.name} {self.start_time:%Y-%m-%d %H:%M}-{self.end_time:%H:%M}"
+
+
 class Provider(models.Model):
     business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="providers")
     display_name = models.CharField(max_length=200)
@@ -104,6 +134,14 @@ class Service(models.Model):
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     duration_minutes = models.PositiveIntegerField(default=60)
+    # Optional mapping so room suitability can be enforced per domain/field.
+    specialty = models.ForeignKey(
+        Specialty,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="services",
+    )
     is_active = models.BooleanField(default=True)
 
     def __str__(self) -> str:
@@ -199,6 +237,72 @@ class CancellationRequest(models.Model):
 
     def __str__(self) -> str:
         return f"CancellationRequest({self.appointment_id}) {self.status}"
+
+
+class AppointmentChangeProposal(models.Model):
+    """A clinic-initiated change proposal that requires provider approval.
+
+    MVP scope:
+      - Proposal created by Staff/Owner due to a clinic constraint (e.g. room malfunction)
+      - Provider approves/rejects via public links
+      - On approval, we re-validate conflicts and apply the move atomically
+
+    Notes:
+      - We snapshot the original appointment fields to prevent stale approvals.
+      - The public link itself is the authorization (signed token).
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+        EXPIRED = "expired", "Expired"
+        CANCELLED = "cancelled", "Cancelled"
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="change_proposals")
+    appointment = models.ForeignKey(Appointment, on_delete=models.CASCADE, related_name="change_proposals")
+
+    # Snapshot of the appointment at proposal creation (for stale-proposal protection)
+    original_room = models.ForeignKey(Room, on_delete=models.SET_NULL, null=True, blank=True, related_name="original_change_proposals")
+    original_start_time = models.DateTimeField()
+    original_end_time = models.DateTimeField()
+
+    # Proposed new values
+    proposed_room = models.ForeignKey(Room, on_delete=models.SET_NULL, null=True, blank=True, related_name="proposed_change_proposals")
+    proposed_start_time = models.DateTimeField()
+    proposed_end_time = models.DateTimeField()
+
+    reason = models.CharField(max_length=255, blank=True, default="")
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="created_change_proposals")
+
+    # Notification bookkeeping (MVP: mostly for debugging/ops)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    sent_message_id = models.CharField(max_length=120, blank=True, default="")
+    send_error = models.TextField(blank=True, default="")
+
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.CharField(max_length=120, blank=True, default="")
+
+    # Ops / troubleshooting (persist approval failures so staff can act quickly)
+    last_error_code = models.CharField(max_length=60, blank=True, default="")
+    last_error_message = models.TextField(blank=True, default="")
+    last_error_payload = models.JSONField(null=True, blank=True)
+    last_attempted_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["business", "status", "created_at"]),
+            models.Index(fields=["business", "expires_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"ChangeProposal({self.appointment_id}) {self.status}"
 
 
 class AuditEvent(models.Model):

@@ -5,6 +5,7 @@ from .models import (
     Appointment,
     AppointmentChangeProposal,
     AuditEvent,
+    WeeklyReportLog,
     Business,
     BusinessMembership,
     CancellationRequest,
@@ -88,7 +89,7 @@ class ProviderAdmin(admin.ModelAdmin):
 
 @admin.register(BusinessMembership)
 class BusinessMembershipAdmin(admin.ModelAdmin):
-    list_display = ("business", "user", "role", "created_at")
+    list_display = ("business", "user", "role", "whatsapp_number", "receive_weekly_report", "receive_alerts", "created_at")
     list_filter = ("business", "role")
     search_fields = ("user__username", "business__name")
 
@@ -105,6 +106,13 @@ class CancellationRequestAdmin(admin.ModelAdmin):
     list_display = ("appointment", "status", "created_at")
     list_filter = ("status",)
     search_fields = ("appointment__id",)
+
+
+@admin.register(WeeklyReportLog)
+class WeeklyReportLogAdmin(admin.ModelAdmin):
+    list_display = ("business", "week_start", "week_end", "status", "created_at")
+    list_filter = ("business", "status")
+    search_fields = ("business__name",)
 
 
 @admin.register(AuditEvent)

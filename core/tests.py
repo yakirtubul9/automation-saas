@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -1048,3 +1048,140 @@ class ChangeProposalStage3Tests(TestCase):
         self.assertTrue(p.last_error_code)
         self.assertTrue(p.last_error_message)
         self.assertIsNotNone(p.last_attempted_at)
+
+
+class WeeklyReportStage6Tests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.owner = User.objects.create_user(username="owner6", password="pass", email="owner6@example.com")
+        self.staff = User.objects.create_user(username="staff6", password="pass", email="staff6@example.com")
+
+        self.biz = Business.objects.create(owner=self.owner, name="Clinic 6", timezone="Asia/Jerusalem")
+        BusinessMembership.objects.create(
+            business=self.biz,
+            user=self.owner,
+            role=BusinessMembership.Role.OWNER,
+            whatsapp_number="+972500000099",
+            receive_weekly_report=True,
+        )
+        BusinessMembership.objects.create(
+            business=self.biz,
+            user=self.staff,
+            role=BusinessMembership.Role.STAFF,
+            whatsapp_number="",
+            receive_weekly_report=True,
+        )
+
+        self.spec = Specialty.objects.create(business=self.biz, name="General")
+        self.room = Room.objects.create(business=self.biz, name="R1")
+        self.room.specialties.add(self.spec)
+        self.provider = Provider.objects.create(
+            business=self.biz,
+            display_name="Dr 6",
+            specialty=self.spec,
+            whatsapp_number="+972500000001",
+        )
+        self.service = Service.objects.create(business=self.biz, name="Consult", specialty=self.spec, duration_minutes=60)
+        self.client = Client.objects.create(business=self.biz, full_name="C1", phone_number="+972500000010")
+
+        tz = timezone.get_current_timezone()
+        self.as_of = timezone.make_aware(parse_datetime("2026-01-19T10:00:00").replace(tzinfo=None), tz)
+
+    def _mk_appt(self, start_dt, status, client=None):
+        return Appointment.objects.create(
+            business=self.biz,
+            provider=self.provider,
+            room=self.room,
+            client=client,
+            service=self.service if client else None,
+            start_time=start_dt,
+            end_time=start_dt + timedelta(minutes=60),
+            status=status,
+        )
+
+    def test_compute_weekly_metrics_counts(self):
+        from core.reports import get_week_bounds, compute_weekly_metrics
+
+        week_start, week_end = get_week_bounds(business=self.biz, as_of=self.as_of)
+        tz = timezone.get_current_timezone()
+
+        # Previous week: 1 completed, 1 no-show, 1 cancelled, 1 reserved
+        prev_start = timezone.make_aware(datetime.combine(week_start - timedelta(days=7), datetime.min.time()), tz)
+        self._mk_appt(prev_start + timedelta(hours=10), Appointment.Status.COMPLETED, client=self.client)
+        self._mk_appt(prev_start + timedelta(hours=12), Appointment.Status.NO_SHOW, client=self.client)
+        self._mk_appt(prev_start + timedelta(hours=14), Appointment.Status.CANCELLED_CLIENT, client=self.client)
+        self._mk_appt(prev_start + timedelta(hours=16), Appointment.Status.RESERVED, client=None)
+
+        # Upcoming week: 2 reserved, 1 booked scheduled, 1 cancelled (should not count as capacity)
+        next_start = timezone.make_aware(datetime.combine(week_start, datetime.min.time()), tz)
+        self._mk_appt(next_start + timedelta(hours=10), Appointment.Status.RESERVED, client=None)
+        self._mk_appt(next_start + timedelta(hours=12), Appointment.Status.RESERVED, client=None)
+        self._mk_appt(next_start + timedelta(hours=14), Appointment.Status.SCHEDULED, client=self.client)
+        self._mk_appt(next_start + timedelta(hours=16), Appointment.Status.CANCELLED_STAFF, client=self.client)
+
+        m = compute_weekly_metrics(business=self.biz, as_of=self.as_of)
+        self.assertEqual(m.prev_total, 4)
+        self.assertEqual(m.prev_booked, 3)
+        self.assertEqual(m.prev_completed, 1)
+        self.assertEqual(m.prev_no_show, 1)
+        self.assertEqual(m.prev_cancelled, 1)
+        self.assertAlmostEqual(m.prev_no_show_rate_pct, 50.0, places=1)
+
+        # capacity counts only active statuses (reserved/scheduled/confirmed/cancellation_requested)
+        self.assertEqual(m.next_capacity, 3)
+        self.assertEqual(m.next_booked, 1)
+        self.assertEqual(m.next_free, 2)
+
+    @override_settings(NOTIFICATION_PROVIDER="mock", WEEKLY_REPORT_SEND_EMAIL=False, WEEKLY_REPORT_TEMPLATE_NAME=None)
+    def test_send_weekly_reports_whatsapp(self):
+        from django.core.management import call_command
+        from unittest.mock import patch
+        from core.notifications.mock import MockProvider
+        from core.models import WeeklyReportLog
+
+        provider = MockProvider()
+        with patch("core.management.commands.send_weekly_reports.get_provider", return_value=provider):
+            with patch.object(provider, "send", wraps=provider.send) as send_mock:
+                call_command(
+                    "send_weekly_reports",
+                    "--execute",
+                    "--business-id",
+                    str(self.biz.id),
+                    "--as-of",
+                    self.as_of.isoformat(),
+                    "--channels",
+                    "whatsapp",
+                )
+                self.assertTrue(send_mock.called)
+
+        log = WeeklyReportLog.objects.filter(business=self.biz).order_by("-id").first()
+        self.assertIsNotNone(log)
+        self.assertEqual(log.status, WeeklyReportLog.Status.SENT)
+
+    @override_settings(
+        WEEKLY_REPORT_SEND_EMAIL=True,
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        DEFAULT_FROM_EMAIL="no-reply@example.com",
+    )
+    def test_send_weekly_reports_email(self):
+        from django.core.management import call_command
+        from django.core import mail
+        from core.models import WeeklyReportLog
+
+        call_command(
+            "send_weekly_reports",
+            "--execute",
+            "--business-id",
+            str(self.biz.id),
+            "--as-of",
+            self.as_of.isoformat(),
+            "--channels",
+            "email",
+        )
+
+        self.assertEqual(len(mail.outbox), 2)  # owner + staff
+        self.assertIn("דוח שבועי", mail.outbox[0].subject)
+
+        log = WeeklyReportLog.objects.filter(business=self.biz).order_by("-id").first()
+        self.assertIsNotNone(log)
+        self.assertIn(log.status, (WeeklyReportLog.Status.SENT, WeeklyReportLog.Status.FAILED))

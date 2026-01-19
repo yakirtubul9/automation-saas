@@ -90,6 +90,13 @@ class BusinessMembership(models.Model):
     business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="memberships")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="business_memberships")
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.STAFF)
+
+    # Optional contact channel for Owner/Staff (WhatsApp-first ops)
+    whatsapp_number = models.CharField(max_length=50, blank=True, default="")
+
+    # Notification prefs (Stage 6)
+    receive_weekly_report = models.BooleanField(default=True)
+    receive_alerts = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -222,6 +229,16 @@ class Appointment(models.Model):
                 from .reminders import skip_pending_reminders
 
                 skip_pending_reminders(self)
+
+
+        # Stage 5 (Recall): when an appointment is marked completed, create a RecallTarget (best-effort).
+        if prev_status is not None and prev_status != self.status and self.status == Appointment.Status.COMPLETED:
+            try:
+                from .recall import ensure_recall_target_for_completed_appointment
+
+                ensure_recall_target_for_completed_appointment(self)
+            except Exception:
+                pass
 
 
 class CancellationRequest(models.Model):
@@ -378,6 +395,109 @@ class WaitlistOffer(models.Model):
         return f"WaitlistOffer({self.entry_id}->{self.slot_id}) {self.status}"
 
 
+class RecallProtocol(models.Model):
+    """Recall protocol per (business, service).
+
+    interval_days: how many days after a completed appointment we should initiate recall.
+    """
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="recall_protocols")
+    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name="recall_protocols")
+
+    interval_days = models.PositiveIntegerField(default=90)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("business", "service")
+
+    def __str__(self) -> str:
+        return f"RecallProtocol({self.business_id},{self.service_id}) {self.interval_days}d"
+
+
+class RecallTarget(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        OFFERED = "offered", "Offered"
+        BOOKED = "booked", "Booked"
+        CANCELLED = "cancelled", "Cancelled"
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="recall_targets")
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="recall_targets")
+    provider = models.ForeignKey(Provider, on_delete=models.SET_NULL, null=True, blank=True, related_name="recall_targets")
+    service = models.ForeignKey(Service, on_delete=models.SET_NULL, null=True, blank=True, related_name="recall_targets")
+
+    source_appointment = models.ForeignKey(
+        Appointment,
+        on_delete=models.CASCADE,
+        related_name="recall_targets",
+        help_text="The completed appointment that created this recall target.",
+    )
+
+    due_at = models.DateTimeField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+
+    last_notified_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    booked_appointment = models.ForeignKey(
+        Appointment,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="recall_bookings",
+        help_text="If the client already booked (or accepted an offer), this points to the booked appointment.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("business", "source_appointment")
+        indexes = [
+            models.Index(fields=["business", "status", "due_at"]),
+            models.Index(fields=["business", "client", "service"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"RecallTarget({self.client_id}) {self.status} due={self.due_at:%Y-%m-%d}"
+
+
+class RecallOffer(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        DECLINED = "declined", "Declined"
+        EXPIRED = "expired", "Expired"
+        CANCELLED = "cancelled", "Cancelled"
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="recall_offers")
+    target = models.ForeignKey(RecallTarget, on_delete=models.CASCADE, related_name="offers")
+    slot = models.ForeignKey(Appointment, on_delete=models.CASCADE, related_name="recall_offers")
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    sent_at = models.DateTimeField(null=True, blank=True)
+    sent_message_id = models.CharField(max_length=120, blank=True, default="")
+    send_error = models.TextField(blank=True, default="")
+
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.CharField(max_length=120, blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("target", "slot")
+        indexes = [
+            models.Index(fields=["business", "status", "created_at"]),
+            models.Index(fields=["business", "expires_at"]),
+            models.Index(fields=["slot", "status"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"RecallOffer({self.target_id}->{self.slot_id}) {self.status}"
+
+
 class AuditEvent(models.Model):
     business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="audit_events")
     actor_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="audit_events")
@@ -390,6 +510,34 @@ class AuditEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.created_at:%Y-%m-%d %H:%M} {self.action}"
+
+
+class WeeklyReportLog(models.Model):
+    """Stage 6: Stores weekly report runs (for debugging/ops).
+
+    We keep the report payload and send results to diagnose delivery issues.
+    """
+
+    class Status(models.TextChoices):
+        DRY_RUN = "dry_run", "Dry run"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="weekly_report_logs")
+    week_start = models.DateField()
+    week_end = models.DateField()
+    payload = models.JSONField(default=dict, blank=True)
+    channels = models.JSONField(default=list, blank=True)  # e.g. ["whatsapp", "email"]
+    recipients = models.JSONField(default=list, blank=True)  # list of dicts
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRY_RUN)
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["business", "week_start", "status", "created_at"])]
+
+    def __str__(self) -> str:
+        return f"WeeklyReportLog({self.business_id}) {self.week_start}..{self.week_end} {self.status}"
 
 
 class Reminder(models.Model):

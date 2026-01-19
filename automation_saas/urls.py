@@ -29,6 +29,7 @@ urlpatterns = [
     path("api/change-proposals/<int:proposal_id>/resend/", core_api.change_proposal_resend_view, name="change_proposal_resend"),
     path("p/<str:token>/<str:action>/", core_views.change_proposal_action_view, name="change_proposal_action"),
     path("w/<str:token>/<str:action>/", core_views.waitlist_offer_action_view, name="waitlist_offer_action"),
+    path("r/<str:token>/<str:action>/", core_views.recall_offer_action_view, name="recall_offer_action"),
 ]
 
 

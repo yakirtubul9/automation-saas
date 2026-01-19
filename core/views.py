@@ -481,4 +481,109 @@ def waitlist_offer_action_view(request, token: str, action: str):
     return HttpResponse(message, status=status, content_type="text/html; charset=utf-8")
 
 
+# --- Public recall offer links (Stage 5) ---
+
+_RECALL_OFFER_ACTION_SALT = "core.recall_offer.action"
+
+
+def make_recall_offer_action_token(*, offer_id: int, action: str) -> str:
+    payload = {"roid": int(offer_id), "act": str(action)}
+    return signing.dumps(payload, salt=_RECALL_OFFER_ACTION_SALT, compress=True)
+
+
+def build_public_recall_offer_action_url(*, token: str, action: str) -> str:
+    base = getattr(settings, "SITE_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+    return f"{base}/r/{token}/{action}/"
+
+
+def recall_offer_action_view(request, token: str, action: str):
+    """Public endpoint for a recall offer: accept / decline.
+
+    GET  -> show a minimal confirmation page
+    POST -> perform the action if still valid
+    """
+    action = (action or "").strip().lower()
+    if action not in {"accept", "decline"}:
+        return HttpResponseBadRequest("Invalid action")
+
+    max_age = int(getattr(settings, "RECALL_OFFER_ACTION_LINK_MAX_AGE_SECONDS", 7 * 24 * 60 * 60))
+
+    try:
+        data = signing.loads(token, salt=_RECALL_OFFER_ACTION_SALT, max_age=max_age)
+    except signing.SignatureExpired:
+        return HttpResponse("הקישור פג תוקף.", status=410)
+    except signing.BadSignature:
+        return HttpResponseBadRequest("קישור לא תקין.")
+
+    if data.get("act") != action:
+        return HttpResponseBadRequest("קישור לא תואם לפעולה.")
+
+    offer_id = data.get("roid")
+    if not offer_id:
+        return HttpResponseBadRequest("קישור לא תקין.")
+
+    from .models import RecallOffer
+
+    offer = (
+        RecallOffer.objects
+        .select_related("target", "target__client", "slot", "slot__service", "slot__provider")
+        .filter(pk=offer_id)
+        .first()
+    )
+    if not offer:
+        return HttpResponseNotFound("ההצעה לא נמצאה.")
+
+    # If the offer itself expired (independent of the signed token expiry),
+    # we treat it as gone and persist the status for audit/consistency.
+    now = timezone.now()
+    if offer.status == RecallOffer.Status.PENDING and offer.expires_at and offer.expires_at <= now:
+        offer.status = RecallOffer.Status.EXPIRED
+        offer.decided_at = now
+        offer.decision_note = "expired"
+        offer.save(update_fields=["status", "decided_at", "decision_note"])
+        return HttpResponse("ההצעה פג תוקף.", status=410)
+
+    if offer.status == RecallOffer.Status.EXPIRED:
+        return HttpResponse("ההצעה פג תוקף.", status=410)
+
+    # Render confirmation page
+    if request.method == "GET":
+        client_name = offer.target.client.full_name if getattr(offer, "target_id", None) else ""
+        service_name = offer.slot.service.name if getattr(offer.slot, "service_id", None) else ""
+        provider_name = offer.slot.provider.display_name if getattr(offer.slot, "provider_id", None) else ""
+        dt = timezone.localtime(offer.slot.start_time)
+        when = dt.strftime("%Y-%m-%d %H:%M")
+        csrf = get_token(request)
+        button = "מאשר" if action == "accept" else "דוחה"
+        title = "תזכורת לביקור המשך"  # Recall
+        html = f"""
+        <html><body style='font-family: Arial, sans-serif; direction: rtl;'>
+          <h2>{title}</h2>
+          <p><b>ללקוח:</b> {client_name}</p>
+          <p><b>שירות:</b> {service_name or '-'} </p>
+          <p><b>רופא:</b> {provider_name or '-'} </p>
+          <p><b>מועד:</b> {when}</p>
+          <form method='post'>
+            <input type='hidden' name='csrfmiddlewaretoken' value='{csrf}' />
+            <button type='submit' style='padding:10px 16px;'>{button}</button>
+          </form>
+        </body></html>
+        """
+        return HttpResponse(html, content_type="text/html; charset=utf-8")
+
+    # POST -> execute action
+    from .recall import accept_offer, decline_offer
+
+    try:
+        if action == "decline":
+            ok, message = decline_offer(offer_id=int(offer_id))
+        else:
+            ok, message = accept_offer(offer_id=int(offer_id))
+    except Exception:
+        ok, message = False, "שגיאה פנימית."
+
+    status = 200 if ok else (410 if "פג תוקף" in (message or "") else 409)
+    return HttpResponse(message, status=status, content_type="text/html; charset=utf-8")
+
+
 

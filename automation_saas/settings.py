@@ -20,6 +20,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 NOTIFICATION_PROVIDER = os.getenv("NOTIFICATION_PROVIDER", "mock")
 
+# --- Stage 6: Weekly reports + alerts ---
+WEEKLY_REPORT_TEMPLATE_NAME = os.getenv("WEEKLY_REPORT_TEMPLATE_NAME", "").strip() or None
+WEEKLY_REPORT_SEND_EMAIL = os.getenv("WEEKLY_REPORT_SEND_EMAIL", "0") == "1"
+
+# Alert thresholds (percentages)
+WEEKLY_REPORT_NO_SHOW_ALERT_PCT = float(os.getenv("WEEKLY_REPORT_NO_SHOW_ALERT_PCT", "20"))
+WEEKLY_REPORT_WEEK_EMPTY_PCT = float(os.getenv("WEEKLY_REPORT_WEEK_EMPTY_PCT", "40"))
+WEEKLY_REPORT_WEEK_FULL_PCT = float(os.getenv("WEEKLY_REPORT_WEEK_FULL_PCT", "90"))
+WEEKLY_REPORT_MIN_CAPACITY_SLOTS = int(os.getenv("WEEKLY_REPORT_MIN_CAPACITY_SLOTS", "10"))
+
+# Email (only used if WEEKLY_REPORT_SEND_EMAIL=1)
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@example.com")
+
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-insecure-key-change-me")
 

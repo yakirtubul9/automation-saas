@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Optional
+from typing import Optional, Sequence
 
 import requests
 from django.utils import timezone
 
 from .base import NotificationProvider
-from typing import Optional, Sequence
 
 
 def _normalize_phone(to: str, *, default_country_code: Optional[str] = None) -> str:

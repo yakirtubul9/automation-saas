@@ -221,8 +221,8 @@ class DashboardTests(TestCase):
 
         # Create a reserved slot (client=None) to avoid auto-reminder creation side effects.
         # The dashboard's "today_appointments" counts all appointments regardless of client.
-        c = Client.objects.create(business=biz, full_name="Client A", phone_number="0500000000")
-        s = Service.objects.create(business=biz, name="Service 1", duration_minutes=60)
+        Client.objects.create(business=biz, full_name="Client A", phone_number="0500000000")
+        Service.objects.create(business=biz, name="Service 1", duration_minutes=60)
 
         now = timezone.now()
         # Ensure appt_today stays on the same calendar date as `today` in the dashboard,

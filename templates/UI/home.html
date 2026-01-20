@@ -1,0 +1,12 @@
+{% extends "UI/base_ui.html" %}
+{% block title %}מערכת תפעול{% endblock %}
+{% block ui_content %}
+<h1>מערכת תפעול</h1>
+<p>זה UI בסיסי (Stage 7). התחלה טובה כדי להוציא תפעול מה-Admin.</p>
+<ul>
+  <li><a href="{% url 'ui_appointments' %}">יומן</a></li>
+  <li><a href="{% url 'ui_clients' %}">לקוחות</a></li>
+  <li><a href="{% url 'ui_clinic' %}">הגדרות קליניקה</a></li>
+  <li><a href="{% url 'ui_ops' %}">סטטוסים / תפעול</a></li>
+</ul>
+{% endblock %}

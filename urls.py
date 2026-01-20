@@ -15,6 +15,7 @@ urlpatterns = [
     path("logout/", core_views.logout_view, name="logout"),
     path("", core_views.dashboard, name="dashboard"),
     path("settings/", core_views.settings_view, name="settings"),
+    path("app/", include("core.ui_urls")),
     path("a/<str:token>/<str:action>/", core_views.appointment_action_view, name="appointment_action"),
 
     # Minimal internal API (used later by Agents). For now - login required.
@@ -30,7 +31,6 @@ urlpatterns = [
     path("p/<str:token>/<str:action>/", core_views.change_proposal_action_view, name="change_proposal_action"),
     path("w/<str:token>/<str:action>/", core_views.waitlist_offer_action_view, name="waitlist_offer_action"),
     path("r/<str:token>/<str:action>/", core_views.recall_offer_action_view, name="recall_offer_action"),
-    path("app/", include("core.ui_urls")),
 ]
 
 

@@ -1,48 +1,69 @@
-<!-- templates/core/dashboard.html -->
 {% extends "base.html" %}
 {% block title %}דשבורד{% endblock %}
 
 {% block content %}
-<h1>דשבורד – {{ business.name }}</h1>
+<div class="flex flex-col gap-6">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold">דשבורד</h1>
+      <p class="mt-1 text-sm text-slate-500">תמונה מהירה על היום והאוטומציות.</p>
+    </div>
+    <div class="flex gap-2">
+      <a href="{% url 'ui_appointments' %}" class="rounded-xl border bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50">פתח יומן</a>
+      <a href="{% url 'ui_ops' %}" class="rounded-xl border bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50">סטטוס תפעול</a>
+    </div>
+  </div>
 
-<div class="stats">
-    <div class="stat-box">
-        <strong>תורים היום</strong><br>
-        {{ today_appointments }}
+  <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="rounded-2xl border bg-white p-4">
+      <div class="text-xs text-slate-500">תורים היום</div>
+      <div class="mt-1 text-2xl font-semibold">{{ today_appointments }}</div>
     </div>
-    <div class="stat-box">
-        <strong>תזכורות ממתינות</strong><br>
-        {{ reminders_pending }}
+    <div class="rounded-2xl border bg-white p-4">
+      <div class="text-xs text-slate-500">תורים קרובים</div>
+      <div class="mt-1 text-2xl font-semibold">{{ upcoming_appointments|length }}</div>
     </div>
-    <div class="stat-box">
-        <strong>תזכורות שנשלחו היום</strong><br>
-        {{ reminders_sent_today }}
+    <div class="rounded-2xl border bg-white p-4">
+      <div class="text-xs text-slate-500">תזכורות ממתינות</div>
+      <div class="mt-1 text-2xl font-semibold">{{ reminders_pending }}</div>
     </div>
+    <div class="rounded-2xl border bg-white p-4">
+      <div class="text-xs text-slate-500">תזכורות שנשלחו היום</div>
+      <div class="mt-1 text-2xl font-semibold">{{ reminders_sent_today }}</div>
+    </div>
+  </div>
+
+  <div class="rounded-2xl border bg-white">
+    <div class="flex items-center justify-between px-4 py-3">
+      <h2 class="text-base font-semibold">תורים קרובים</h2>
+      <a class="text-sm text-slate-700 hover:underline" href="{% url 'ui_appointments' %}">לכל היומן</a>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600">
+          <tr>
+            <th class="px-4 py-2 text-right font-medium">מתי</th>
+            <th class="px-4 py-2 text-right font-medium">רופא</th>
+            <th class="px-4 py-2 text-right font-medium">חדר</th>
+            <th class="px-4 py-2 text-right font-medium">מטופל</th>
+            <th class="px-4 py-2 text-right font-medium">סטטוס</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y">
+          {% for appt in upcoming_appointments %}
+            <tr class="hover:bg-slate-50">
+              <td class="px-4 py-2 whitespace-nowrap">{{ appt.start_time|date:"d/m/Y H:i" }}</td>
+              <td class="px-4 py-2">{{ appt.provider.display_name|default:"-" }}</td>
+              <td class="px-4 py-2">{{ appt.room.name|default:"-" }}</td>
+              <td class="px-4 py-2">{% if appt.client %}{{ appt.client.full_name }}{% else %}—{% endif %}</td>
+              <td class="px-4 py-2">{{ appt.get_status_display }}</td>
+            </tr>
+          {% empty %}
+            <tr><td class="px-4 py-6 text-slate-500" colspan="5">אין תורים קרובים.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
 </div>
-
-<h2>תורים קרובים</h2>
-<table>
-    <thead>
-    <tr>
-        <th>לקוח</th>
-        <th>שירות</th>
-        <th>זמן התחלה</th>
-        <th>סטטוס</th>
-    </tr>
-    </thead>
-    <tbody>
-    {% for appt in upcoming_appointments %}
-        <tr>
-            <td>{{ appt.client.full_name }}</td>
-            <td>{% if appt.service %}{{ appt.service.name }}{% else %}-{% endif %}</td>
-            <td>{{ appt.start_time }}</td>
-            <td>{{ appt.get_status_display }}</td>
-        </tr>
-    {% empty %}
-        <tr>
-            <td colspan="4">אין תורים קרובים.</td>
-        </tr>
-    {% endfor %}
-    </tbody>
-</table>
 {% endblock %}

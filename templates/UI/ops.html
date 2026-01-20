@@ -1,0 +1,29 @@
+{% extends "UI/base_ui.html" %}
+{% block title %}תפעול{% endblock %}
+{% block ui_content %}
+<h1>תפעול / סטטוסים</h1>
+
+<h2>Reminders אחרונים</h2>
+<table>
+  <thead><tr><th>ID</th><th>סטטוס</th><th>תור</th></tr></thead>
+  <tbody>
+  {% for r in reminders %}
+    <tr><td>{{ r.id }}</td><td>{{ r.status }}</td><td>{{ r.appointment_id }}</td></tr>
+  {% empty %}
+    <tr><td colspan="3">אין.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% if audits %}
+<h2>Audit (אחרון)</h2>
+<table>
+  <thead><tr><th>ID</th><th>action</th><th>created</th></tr></thead>
+  <tbody>
+  {% for a in audits %}
+    <tr><td>{{ a.id }}</td><td>{{ a.action }}</td><td>{{ a.created_at }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

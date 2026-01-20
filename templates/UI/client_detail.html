@@ -1,0 +1,24 @@
+{% extends "UI/base_ui.html" %}
+{% block title %}לקוח{% endblock %}
+{% block ui_content %}
+<h1>{{ client.full_name }}</h1>
+<p>טלפון: {{ client.phone }}</p>
+
+<h2>היסטוריית תורים</h2>
+<table>
+  <thead><tr><th>תאריך</th><th>שירות</th><th>רופא</th><th>חדר</th><th>סטטוס</th></tr></thead>
+  <tbody>
+  {% for a in appts %}
+    <tr>
+      <td>{{ a.start_time }}</td>
+      <td>{% if a.service %}{{ a.service.name }}{% else %}-{% endif %}</td>
+      <td>{{ a.provider }}</td>
+      <td>{{ a.room }}</td>
+      <td>{{ a.get_status_display }}</td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="5">אין היסטוריה.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

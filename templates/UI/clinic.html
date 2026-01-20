@@ -1,0 +1,29 @@
+{% extends "UI/base_ui.html" %}
+{% block title %}קליניקה{% endblock %}
+{% block ui_content %}
+<h1>הגדרות קליניקה (בסיסי)</h1>
+
+<h2>חדרים</h2>
+<table>
+  <thead><tr><th>שם</th><th>תחום</th></tr></thead>
+  <tbody>
+  {% for r in rooms %}
+    <tr><td>{{ r.name }}</td><td>{{ r.specialty }}</td></tr>
+  {% empty %}
+    <tr><td colspan="2">אין חדרים.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>שירותים</h2>
+<table>
+  <thead><tr><th>שם</th><th>תחום</th><th>משך</th></tr></thead>
+  <tbody>
+  {% for s in services %}
+    <tr><td>{{ s.name }}</td><td>{{ s.specialty }}</td><td>{{ s.duration_minutes }}</td></tr>
+  {% empty %}
+    <tr><td colspan="3">אין שירותים.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

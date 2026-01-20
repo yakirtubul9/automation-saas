@@ -1,0 +1,43 @@
+<tr id="appt-row-{{ appt.id }}" class="hover:bg-slate-50">
+  <td class="px-4 py-2 whitespace-nowrap">{{ appt.start_time|date:"H:i" }}–{{ appt.end_time|date:"H:i" }}</td>
+  <td class="px-4 py-2">{{ appt.provider.display_name|default:"-" }}</td>
+  <td class="px-4 py-2">{{ appt.room.name|default:"-" }}</td>
+  <td class="px-4 py-2">
+    {% if appt.client %}
+      {% if can_see_clients %}
+        <a class="hover:underline" href="{% url 'ui_client_detail' appt.client.id %}">{{ appt.client.full_name }}</a>
+      {% else %}
+        <span class="text-slate-500">מטופל</span>
+      {% endif %}
+    {% else %}
+      <span class="text-slate-400">—</span>
+    {% endif %}
+  </td>
+  <td class="px-4 py-2">{{ appt.service.name|default:"-" }}</td>
+  <td class="px-4 py-2">
+    <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-xs">
+      {{ appt.get_status_display }}
+    </span>
+  </td>
+  <td class="px-4 py-2">
+    <div class="flex flex-wrap gap-2">
+      <a class="rounded-lg border bg-white px-3 py-1.5 text-xs font-medium hover:bg-slate-50" href="{% url 'ui_appointment_edit' appt.id %}">עריכה</a>
+
+      <form
+        method="post"
+        action="{% url 'ui_appointment_status' appt.id %}"
+        hx-post="{% url 'ui_appointment_status' appt.id %}"
+        hx-target="#appt-row-{{ appt.id }}"
+        hx-swap="outerHTML"
+      >
+        {% csrf_token %}
+        <select name="status" class="rounded-lg border border-slate-300 px-2 py-1 text-xs">
+          {% for k,v in appt.Status.choices %}
+            <option value="{{ k }}" {% if appt.status == k %}selected{% endif %}>{{ v }}</option>
+          {% endfor %}
+        </select>
+        <button class="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800" type="submit">עדכן</button>
+      </form>
+    </div>
+  </td>
+</tr>

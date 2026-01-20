@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}הגדרות קליניקה{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold">הגדרות קליניקה</h1>
+    <p class="mt-1 text-sm text-slate-500">Rooms / Services / Providers (בסיסי).</p>
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-2">
+    <div class="rounded-2xl border bg-white p-5">
+      <div class="flex items-center justify-between">
+        <h2 class="text-base font-semibold">חדרים</h2>
+        <form method="post" action="{% url 'ui_clinic_add_room' %}" class="flex gap-2">
+          {% csrf_token %}
+          {{ room_form.name }}
+          {{ room_form.specialties }}
+          <button class="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800">הוסף</button>
+        </form>
+      </div>
+
+      <div class="mt-4 overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600">
+            <tr>
+              <th class="px-3 py-2 text-right font-medium">שם</th>
+              <th class="px-3 py-2 text-right font-medium">תחום</th>
+              <th class="px-3 py-2 text-right font-medium">פעיל</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for r in rooms %}
+              <tr class="hover:bg-slate-50">
+                <td class="px-3 py-2">{{ r.name }}</td>
+                <td class="px-3 py-2">{% for sp in r.specialties.all %}{{ sp.name }}{% if not forloop.last %}, {% endif %}{% empty %}-{% endfor %}</td>
+                <td class="px-3 py-2">{% if r.is_active %}כן{% else %}לא{% endif %}</td>
+              </tr>
+            {% empty %}
+              <tr><td class="px-3 py-6 text-slate-500" colspan="3">אין חדרים.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="rounded-2xl border bg-white p-5">
+      <div class="flex items-center justify-between">
+        <h2 class="text-base font-semibold">שירותים</h2>
+        <form method="post" action="{% url 'ui_clinic_add_service' %}" class="flex gap-2">
+          {% csrf_token %}
+          {{ service_form.name }}
+          {{ service_form.specialty }}
+          {{ service_form.duration_minutes }}
+                    <button class="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800">הוסף</button>
+        </form>
+      </div>
+
+      <div class="mt-4 overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600">
+            <tr>
+              <th class="px-3 py-2 text-right font-medium">שם</th>
+              <th class="px-3 py-2 text-right font-medium">תחום</th>
+              <th class="px-3 py-2 text-right font-medium">משך</th>
+                          </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for s in services %}
+              <tr class="hover:bg-slate-50">
+                <td class="px-3 py-2">{{ s.name }}</td>
+                <td class="px-3 py-2">{{ s.specialty.name|default:"-" }}</td>
+                <td class="px-3 py-2">{{ s.duration_minutes }} דק'</td>
+                              </tr>
+            {% empty %}
+              <tr><td class="px-3 py-6 text-slate-500" colspan="3">אין שירותים.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="rounded-2xl border bg-white p-5">
+    <h2 class="text-base font-semibold">רופאים (read-only כאן)</h2>
+    <p class="mt-1 text-sm text-slate-500">בשלב הזה ניהול רופאים מלא עדיין דרך Admin / API.</p>
+
+    <div class="mt-4 overflow-x-auto">
+      <table class="min-w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600">
+          <tr>
+            <th class="px-3 py-2 text-right font-medium">שם</th>
+            <th class="px-3 py-2 text-right font-medium">תחום</th>
+            <th class="px-3 py-2 text-right font-medium">חדר מועדף</th>
+            <th class="px-3 py-2 text-right font-medium">פעיל</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y">
+          {% for p in providers %}
+            <tr class="hover:bg-slate-50">
+              <td class="px-3 py-2">{{ p.display_name }}</td>
+              <td class="px-3 py-2">{{ p.specialty.name|default:"-" }}</td>
+              <td class="px-3 py-2">{{ p.preferred_room.name|default:"-" }}</td>
+              <td class="px-3 py-2">{% if p.is_active %}כן{% else %}לא{% endif %}</td>
+            </tr>
+          {% empty %}
+            <tr><td class="px-3 py-6 text-slate-500" colspan="4">אין רופאים.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function() {
+    var fields = document.querySelectorAll("input, select");
+    fields.forEach(function(el) {
+      if (el.type === "hidden") return;
+      el.classList.add("rounded-xl","border","border-slate-300","px-2","py-2","text-xs");
+    });
+  })();
+</script>
+{% endblock %}

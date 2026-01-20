@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}סטטוס תפעול{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold">סטטוס תפעול</h1>
+    <p class="mt-1 text-sm text-slate-500">תצוגה מרוכזת כדי להבין למה אוטומציה נכשלה.</p>
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-2">
+    <div class="rounded-2xl border bg-white overflow-hidden">
+      <div class="px-4 py-3 text-sm font-semibold">Reminders (אחרונים)</div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600">
+            <tr>
+              <th class="px-4 py-2 text-right font-medium">נוצר</th>
+              <th class="px-4 py-2 text-right font-medium">מתי אמור</th>
+              <th class="px-4 py-2 text-right font-medium">סטטוס</th>
+              <th class="px-4 py-2 text-right font-medium">תור</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for r in reminders %}
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2 whitespace-nowrap">{{ r.created_at|date:"d/m H:i" }}</td>
+                <td class="px-4 py-2 whitespace-nowrap">{{ r.scheduled_time|date:"d/m H:i" }}</td>
+                <td class="px-4 py-2">{{ r.get_status_display }}</td>
+                <td class="px-4 py-2 whitespace-nowrap">{{ r.appointment.start_time|date:"d/m H:i" }}</td>
+              </tr>
+            {% empty %}
+              <tr><td class="px-4 py-6 text-slate-500" colspan="4">אין נתונים.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="rounded-2xl border bg-white overflow-hidden">
+      <div class="px-4 py-3 text-sm font-semibold">Audit Log (אחרונים)</div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600">
+            <tr>
+              <th class="px-4 py-2 text-right font-medium">מתי</th>
+              <th class="px-4 py-2 text-right font-medium">actor</th>
+              <th class="px-4 py-2 text-right font-medium">event</th>
+              <th class="px-4 py-2 text-right font-medium">entity</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for e in audit_events %}
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2 whitespace-nowrap">{{ e.created_at|date:"d/m H:i" }}</td>
+                <td class="px-4 py-2">{{ e.actor_user.username|default:"-" }}</td>
+                <td class="px-4 py-2">{{ e.event_type }}</td>
+                <td class="px-4 py-2">{{ e.entity_type }} #{{ e.entity_id }}</td>
+              </tr>
+            {% empty %}
+              <tr><td class="px-4 py-6 text-slate-500" colspan="4">אין נתונים.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-3">
+    <div class="rounded-2xl border bg-white overflow-hidden">
+      <div class="px-4 py-3 text-sm font-semibold">Waitlist Offers</div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600">
+            <tr>
+              <th class="px-4 py-2 text-right font-medium">נוצר</th>
+              <th class="px-4 py-2 text-right font-medium">רופא</th>
+              <th class="px-4 py-2 text-right font-medium">סטטוס</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for o in waitlist_offers %}
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2 whitespace-nowrap">{{ o.created_at|date:"d/m H:i" }}</td>
+                <td class="px-4 py-2">{{ o.entry.provider.display_name|default:"-" }}</td>
+                <td class="px-4 py-2">{{ o.get_status_display }}</td>
+              </tr>
+            {% empty %}
+              <tr><td class="px-4 py-6 text-slate-500" colspan="3">אין נתונים.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="rounded-2xl border bg-white overflow-hidden">
+      <div class="px-4 py-3 text-sm font-semibold">Recall Offers</div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600">
+            <tr>
+              <th class="px-4 py-2 text-right font-medium">נוצר</th>
+              <th class="px-4 py-2 text-right font-medium">רופא</th>
+              <th class="px-4 py-2 text-right font-medium">סטטוס</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for o in recall_offers %}
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2 whitespace-nowrap">{{ o.created_at|date:"d/m H:i" }}</td>
+                <td class="px-4 py-2">{{ o.target.provider.display_name|default:"-" }}</td>
+                <td class="px-4 py-2">{{ o.get_status_display }}</td>
+              </tr>
+            {% empty %}
+              <tr><td class="px-4 py-6 text-slate-500" colspan="3">אין נתונים.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="rounded-2xl border bg-white overflow-hidden">
+      <div class="px-4 py-3 text-sm font-semibold">Weekly Reports</div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600">
+            <tr>
+              <th class="px-4 py-2 text-right font-medium">נוצר</th>
+              <th class="px-4 py-2 text-right font-medium">טווח</th>
+              <th class="px-4 py-2 text-right font-medium">סטטוס</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for w in weekly_logs %}
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2 whitespace-nowrap">{{ w.created_at|date:"d/m H:i" }}</td>
+                <td class="px-4 py-2 whitespace-nowrap">{{ w.week_start }}..{{ w.week_end }}</td>
+                <td class="px-4 py-2">{{ w.status }}</td>
+              </tr>
+            {% empty %}
+              <tr><td class="px-4 py-6 text-slate-500" colspan="3">אין נתונים.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "UI/base_ui.html" %}
+{% block title %}לקוחות{% endblock %}
+{% block ui_content %}
+<h1>לקוחות</h1>
+
+<form method="get" style="margin: 10px 0;">
+  <input name="q" placeholder="חיפוש לפי שם" value="{{ q }}" />
+  <button type="submit">חפש</button>
+</form>
+
+<table>
+  <thead><tr><th>שם</th><th>טלפון</th><th></th></tr></thead>
+  <tbody>
+  {% for c in clients %}
+    <tr>
+      <td>{{ c.full_name }}</td>
+      <td>{{ c.phone }}</td>
+      <td><a href="{% url 'ui_client_detail' c.id %}">פרטים</a></td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="3">אין לקוחות.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

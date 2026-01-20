@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}פרטי לקוח{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl space-y-6">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-semibold">
+        {% if can_see_clients %}{{ client.full_name }}{% else %}Client #{{ client.id }}{% endif %}
+      </h1>
+      <p class="mt-1 text-sm text-slate-500">
+        {% if can_see_clients %}{{ client.phone_number }}{% else %}פרטי קשר מוסתרים{% endif %}
+      </p>
+    </div>
+    <a href="{% url 'ui_clients' %}" class="rounded-xl border bg-white px-4 py-2 text-sm font-medium hover:bg-slate-50">חזרה</a>
+  </div>
+
+  <div class="rounded-2xl border bg-white overflow-hidden">
+    <div class="px-4 py-3 text-sm font-semibold">היסטוריית תורים (אחרונים)</div>
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600">
+          <tr>
+            <th class="px-4 py-2 text-right font-medium">מתי</th>
+            <th class="px-4 py-2 text-right font-medium">רופא</th>
+            <th class="px-4 py-2 text-right font-medium">חדר</th>
+            <th class="px-4 py-2 text-right font-medium">שירות</th>
+            <th class="px-4 py-2 text-right font-medium">סטטוס</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y">
+          {% for a in appointments %}
+            <tr class="hover:bg-slate-50">
+              <td class="px-4 py-2 whitespace-nowrap">{{ a.start_time|date:"d/m/Y H:i" }}</td>
+              <td class="px-4 py-2">{{ a.provider.display_name|default:"-" }}</td>
+              <td class="px-4 py-2">{{ a.room.name|default:"-" }}</td>
+              <td class="px-4 py-2">{{ a.service.name|default:"-" }}</td>
+              <td class="px-4 py-2">{{ a.get_status_display }}</td>
+            </tr>
+          {% empty %}
+            <tr><td class="px-4 py-8 text-slate-500" colspan="5">אין תורים.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

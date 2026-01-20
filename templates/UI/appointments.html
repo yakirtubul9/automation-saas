@@ -1,0 +1,34 @@
+{% extends "UI/base_ui.html" %}
+{% block title %}יומן{% endblock %}
+{% block ui_content %}
+<h1>יומן יומי — {{ target_date }}</h1>
+
+<form method="get" style="margin: 10px 0;">
+  <label>תאריך (YYYY-MM-DD):</label>
+  <input name="day" value="{{ target_date|date:'Y-m-d' }}" />
+  <button type="submit">הצג</button>
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>התחלה</th><th>סיום</th><th>רופא</th><th>חדר</th><th>לקוח</th><th>שירות</th><th>סטטוס</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.start }}</td>
+        <td>{{ r.end }}</td>
+        <td>{{ r.provider }}</td>
+        <td>{{ r.room }}</td>
+        <td>{{ r.client }}</td>
+        <td>{{ r.service }}</td>
+        <td>{{ r.status }}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="7">אין שיבוצים ליום הזה.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

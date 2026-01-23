@@ -22,8 +22,10 @@ from core.models import (
     RoomBlock,
     Service,
     Specialty,
+    WhatsAppMessage,
 )
 from core.views import build_public_action_url, make_appointment_action_token
+
 
 
 class WaitlistFlowTests(TestCase):
@@ -1185,3 +1187,123 @@ class WeeklyReportStage6Tests(TestCase):
         log = WeeklyReportLog.objects.filter(business=self.biz).order_by("-id").first()
         self.assertIsNotNone(log)
         self.assertIn(log.status, (WeeklyReportLog.Status.SENT, WeeklyReportLog.Status.FAILED))
+
+
+@override_settings(NOTIFICATION_PROVIDER="mock")
+class WhatsAppClientAgentTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.staff_user = User.objects.create_user(username="wa_staff", password="pass")
+
+        self.business = Business.objects.create(owner=self.staff_user, name="Clinic WA", timezone="Asia/Jerusalem")
+        BusinessMembership.objects.create(business=self.business, user=self.staff_user, role=BusinessMembership.Role.STAFF)
+
+        self.spec = Specialty.objects.create(business=self.business, name="Dent")
+        self.room = Room.objects.create(business=self.business, name="Room 1")
+        self.room.specialties.add(self.spec)
+
+        self.provider = Provider.objects.create(
+            business=self.business,
+            display_name="Dr WA",
+            specialty=self.spec,
+            whatsapp_number="+972500000099",
+        )
+        self.service = Service.objects.create(business=self.business, name="Consult", specialty=self.spec, duration_minutes=30)
+
+        start = (timezone.now() + timedelta(days=3)).replace(minute=0, second=0, microsecond=0)
+        reserved_status = getattr(Appointment.Status, "RESERVED", "reserved")
+        self.slot1 = Appointment.objects.create(
+            business=self.business,
+            provider=self.provider,
+            room=self.room,
+            client=None,
+            service=self.service,
+            start_time=start,
+            end_time=start + timedelta(minutes=30),
+            status=reserved_status,
+        )
+        self.slot2 = Appointment.objects.create(
+            business=self.business,
+            provider=self.provider,
+            room=self.room,
+            client=None,
+            service=self.service,
+            start_time=start + timedelta(hours=1),
+            end_time=start + timedelta(hours=1, minutes=30),
+            status=reserved_status,
+        )
+
+        self.client_phone = "972500000010"
+
+    def _post_wa(self, text: str, *, wa_id: str = "wamid.test"):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"display_phone_number": self.provider.whatsapp_number},
+                                "contacts": [{"profile": {"name": "Test User"}}],
+                                "messages": [
+                                    {
+                                        "id": wa_id,
+                                        "from": self.client_phone,
+                                        "type": "text",
+                                        "text": {"body": text},
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        return self.client.post(reverse("whatsapp_webhook"), data=json.dumps(payload), content_type="application/json")
+
+    def test_booking_flow_creates_appointment(self):
+        r1 = self._post_wa("אני רוצה לקבוע תור", wa_id="wamid.1")
+        self.assertEqual(r1.status_code, 200)
+
+        # Agent should reply with slot choices
+        out = WhatsAppMessage.objects.filter(
+            business=self.business,
+            direction=WhatsAppMessage.Direction.OUTBOUND,
+            purpose=WhatsAppMessage.Purpose.CLIENT_AGENT,
+        ).order_by("created_at")
+        self.assertTrue(out.exists())
+        self.assertIn("חלונות", out.last().body)
+
+        r2 = self._post_wa("1", wa_id="wamid.2")
+        self.assertEqual(r2.status_code, 200)
+        self.assertIn("לאישור", WhatsAppMessage.objects.order_by("created_at").last().body)
+
+        r3 = self._post_wa("כן", wa_id="wamid.3")
+        self.assertEqual(r3.status_code, 200)
+
+        self.slot1.refresh_from_db()
+        self.assertIsNotNone(self.slot1.client_id)
+        self.assertEqual(self.slot1.status, Appointment.Status.SCHEDULED)
+
+    def test_cancel_flow_cancels_appointment(self):
+        # Create a scheduled appointment for the client
+        c = Client.objects.create(business=self.business, full_name="C", phone_number=self.client_phone)
+        appt = Appointment.objects.create(
+            business=self.business,
+            provider=self.provider,
+            room=self.room,
+            client=c,
+            service=self.service,
+            start_time=(timezone.now() + timedelta(days=2)).replace(minute=0, second=0, microsecond=0),
+            end_time=(timezone.now() + timedelta(days=2)).replace(minute=30, second=0, microsecond=0),
+            status=Appointment.Status.SCHEDULED,
+        )
+
+        r1 = self._post_wa("ביטול תור", wa_id="wamid.c1")
+        self.assertEqual(r1.status_code, 200)
+        self.assertIn("לבטל", WhatsAppMessage.objects.order_by("created_at").last().body)
+
+        r2 = self._post_wa("כן", wa_id="wamid.c2")
+        self.assertEqual(r2.status_code, 200)
+
+        appt.refresh_from_db()
+        self.assertIn(appt.status, (Appointment.Status.CANCELLED_CLIENT, Appointment.Status.CANCELLATION_REQUESTED))

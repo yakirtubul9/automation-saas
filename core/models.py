@@ -540,6 +540,80 @@ class WeeklyReportLog(models.Model):
         return f"WeeklyReportLog({self.business_id}) {self.week_start}..{self.week_end} {self.status}"
 
 
+class WhatsAppMessage(models.Model):
+    """Stores inbound/outbound WhatsApp messages for debugging and audit.
+
+    Stage 8: Conversational client agent relies on these logs
+    to support troubleshooting and basic idempotency.
+    """
+
+    class Direction(models.TextChoices):
+        INBOUND = "in", "Inbound"
+        OUTBOUND = "out", "Outbound"
+
+    class Purpose(models.TextChoices):
+        REMINDER = "reminder", "Reminder"
+        CLIENT_AGENT = "client_agent", "Client agent"
+        OPS_AGENT = "ops_agent", "Ops agent"
+        OTHER = "other", "Other"
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="whatsapp_messages")
+
+    # Best-effort linkage (not always known at ingest time)
+    provider = models.ForeignKey(Provider, on_delete=models.SET_NULL, null=True, blank=True, related_name="whatsapp_messages")
+    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True, blank=True, related_name="whatsapp_messages")
+
+    direction = models.CharField(max_length=8, choices=Direction.choices)
+    purpose = models.CharField(max_length=20, choices=Purpose.choices, default=Purpose.OTHER)
+
+    wa_message_id = models.CharField(max_length=200, blank=True, default="")
+    from_number = models.CharField(max_length=50, blank=True, default="")
+    to_number = models.CharField(max_length=50, blank=True, default="")
+    body = models.TextField(blank=True, default="")
+    raw_payload = models.JSONField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["business", "created_at"]),
+            models.Index(fields=["business", "direction", "created_at"]),
+            models.Index(fields=["wa_message_id"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"WA {self.direction} {self.purpose} {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class ConversationSession(models.Model):
+    """Short-lived state machine for WhatsApp conversations.
+
+    We keep state minimal and expire sessions aggressively so that
+    the agent doesn't get stuck.
+    """
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="conversation_sessions")
+    provider = models.ForeignKey(Provider, on_delete=models.CASCADE, related_name="conversation_sessions")
+
+    # WhatsApp sender number (patient)
+    wa_from_number = models.CharField(max_length=50)
+
+    state = models.JSONField(default=dict, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("business", "provider", "wa_from_number")
+        indexes = [
+            models.Index(fields=["business", "provider", "wa_from_number"]),
+            models.Index(fields=["expires_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Session({self.provider_id} {self.wa_from_number})"
+
+
 class Reminder(models.Model):
     class ReminderStatus(models.TextChoices):
         PENDING = "pending", "ממתין"

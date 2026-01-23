@@ -17,6 +17,8 @@ from .models import (
     RoomBlock,
     Service,
     Specialty,
+    WhatsAppMessage,
+    ConversationSession,
 )
 
 
@@ -118,8 +120,20 @@ class WeeklyReportLogAdmin(admin.ModelAdmin):
 @admin.register(AuditEvent)
 class AuditEventAdmin(admin.ModelAdmin):
     list_display = ("business", "created_at", "action", "actor_user", "object_type", "object_id")
-    list_filter = ("business", "action")
-    search_fields = ("action", "object_type", "object_id", "actor_user__username")
+
+
+@admin.register(WhatsAppMessage)
+class WhatsAppMessageAdmin(admin.ModelAdmin):
+    list_display = ("business", "created_at", "direction", "purpose", "provider", "client", "from_number", "to_number")
+    list_filter = ("business", "direction", "purpose")
+    search_fields = ("from_number", "to_number", "wa_message_id", "body")
+
+
+@admin.register(ConversationSession)
+class ConversationSessionAdmin(admin.ModelAdmin):
+    list_display = ("business", "provider", "wa_from_number", "expires_at", "updated_at")
+    list_filter = ("business",)
+    search_fields = ("wa_from_number", "provider__display_name")
 
 
 

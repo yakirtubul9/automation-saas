@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 from django.contrib.auth.decorators import login_required
 from django.conf import settings
 from django.db import transaction
-from django.http import HttpRequest, JsonResponse
+from django.http import HttpRequest, JsonResponse, HttpResponse
+from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -2131,3 +2132,41 @@ def change_proposal_resend_view(request: HttpRequest, proposal_id: int) -> JsonR
             "reject": {"url": reject_url},
         }
     )
+
+
+@csrf_exempt
+def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
+    """WhatsApp Cloud webhook.
+
+    GET: verification (hub.challenge)
+    POST: inbound messages -> Stage 8 client agent
+
+    Notes:
+      - CSRF exempt (called by Meta)
+      - The agent is deterministic and actions-only in this stage.
+    """
+
+    if request.method == "GET":
+        mode = request.GET.get("hub.mode")
+        token = request.GET.get("hub.verify_token")
+        challenge = request.GET.get("hub.challenge")
+
+        expected = getattr(settings, "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
+        if mode == "subscribe" and expected and token == expected:
+            # Meta expects a 200 with the challenge echoed back (plain text).
+            return HttpResponse(challenge or "")
+        return _json_error(403, "forbidden", "Verification failed")
+
+    if request.method != "POST":
+        return _json_error(405, "method_not_allowed", "Use GET or POST")
+
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        return _json_error(400, "bad_json", "Body must be valid JSON")
+
+    # Import locally to keep module import graph simple.
+    from core.agents.client_agent import handle_whatsapp_webhook_payload
+
+    handle_whatsapp_webhook_payload(payload)
+    return JsonResponse({"ok": True})

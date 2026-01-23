@@ -935,6 +935,7 @@ def room_block_view(request: HttpRequest) -> JsonResponse:
         return _json_error(403, "forbidden", "Only owner/staff can manage room blocks")
 
     if request.method == "POST":
+        print("WA INBOUND POST received", flush=True)
         parsed = _parse_room_block_input(request, business)
         if isinstance(parsed, JsonResponse):
             return parsed

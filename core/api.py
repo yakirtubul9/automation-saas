@@ -1,5 +1,6 @@
 from __future__ import annotations
-
+import os
+import logging
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, time as dtime, timedelta
@@ -13,6 +14,7 @@ from django.http import HttpRequest, JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+logger = logging.getLogger(__name__)
 
 from .models import (
     Appointment,
@@ -2135,26 +2137,47 @@ def change_proposal_resend_view(request: HttpRequest, proposal_id: int) -> JsonR
 
 
 @csrf_exempt
-def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
+@csrf_exempt
+def whatsapp_webhook_view(request: HttpRequest):
     """WhatsApp Cloud webhook.
 
     GET: verification (hub.challenge)
     POST: inbound messages -> Stage 8 client agent
-
-    Notes:
-      - CSRF exempt (called by Meta)
-      - The agent is deterministic and actions-only in this stage.
     """
+
+    def _mask(v: object) -> str:
+        s = str(v or "")
+        if not s:
+            return ""
+        if len(s) <= 6:
+            return s[:1] + "***" + s[-1:]
+        return s[:3] + "***" + s[-3:]
 
     if request.method == "GET":
         mode = request.GET.get("hub.mode")
         token = request.GET.get("hub.verify_token")
         challenge = request.GET.get("hub.challenge")
 
-        expected = getattr(settings, "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
-        if mode == "subscribe" and expected and token == expected:
-            # Meta expects a 200 with the challenge echoed back (plain text).
-            return HttpResponse(challenge or "")
+        expected_settings = getattr(settings, "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "") or ""
+        expected_env = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "") or ""
+
+        # IMPORTANT: fallback to ENV so you don't depend on settings.py wiring
+        expected = expected_settings or expected_env
+
+        logger.warning(
+            "WA VERIFY debug: mode=%r token=%s challenge=%r expected_settings=%s expected_env=%s expected_used=%s",
+            mode,
+            _mask(token),
+            challenge,
+            _mask(expected_settings),
+            _mask(expected_env),
+            _mask(expected),
+        )
+
+        if mode == "subscribe" and expected and token == expected and challenge is not None:
+            # Meta expects 200 + plain text challenge
+            return HttpResponse(challenge, content_type="text/plain", status=200)
+
         return _json_error(403, "forbidden", "Verification failed")
 
     if request.method != "POST":
@@ -2165,8 +2188,8 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     except json.JSONDecodeError:
         return _json_error(400, "bad_json", "Body must be valid JSON")
 
-    # Import locally to keep module import graph simple.
     from core.agents.client_agent import handle_whatsapp_webhook_payload
 
     handle_whatsapp_webhook_payload(payload)
     return JsonResponse({"ok": True})
+

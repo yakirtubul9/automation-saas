@@ -15,6 +15,8 @@ from pathlib import Path
 
 import dj_database_url
 
+WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.environ.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 

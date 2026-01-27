@@ -74,6 +74,13 @@ class Provider(models.Model):
     business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="providers")
     display_name = models.CharField(max_length=200)
     whatsapp_number = models.CharField(max_length=50, blank=True, default="")
+    whatsapp_phone_number_id = models.CharField(
+        max_length=64,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text="WhatsApp Cloud API phone_number_id for reliable routing",
+    )
     specialty = models.ForeignKey(Specialty, on_delete=models.SET_NULL, null=True, blank=True, related_name="providers")
     is_active = models.BooleanField(default=True)
 

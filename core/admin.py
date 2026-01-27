@@ -84,9 +84,9 @@ class RoomAdmin(admin.ModelAdmin):
 
 @admin.register(Provider)
 class ProviderAdmin(admin.ModelAdmin):
-    list_display = ("display_name", "business", "specialty", "whatsapp_number", "is_active")
+    list_display = ("display_name", "business", "specialty", "whatsapp_number", "whatsapp_phone_number_id", "is_active")
     list_filter = ("business", "is_active", "specialty")
-    search_fields = ("display_name", "whatsapp_number")
+    search_fields = ("display_name", "whatsapp_number", "whatsapp_phone_number_id")
 
 
 @admin.register(BusinessMembership)

@@ -116,6 +116,14 @@ def _get_or_create_client(*, business: Business, wa_from_number: str, display_na
     return Client.objects.create(business=business, full_name=name[:200], phone_number=wa_from_number)
 
 
+
+def _provider_for_phone_number_id(phone_number_id: str) -> Optional[Provider]:
+    pnid = (phone_number_id or "").strip()
+    if not pnid:
+        return None
+    return Provider.objects.filter(is_active=True, whatsapp_phone_number_id=pnid).first()
+
+
 def _provider_for_display_number(display_phone_number: str) -> Optional[Provider]:
     cc = _default_cc()
     # We store provider.whatsapp_number per provider; match by equivalence
@@ -158,13 +166,14 @@ def handle_whatsapp_webhook_payload(payload: Dict[str, Any]) -> None:
         from_number_raw = (msg.get("from") or "").strip()
         from_number = normalize_phone(from_number_raw, default_country_code=cc)
         to_display_number = (metadata.get("display_phone_number") or "").strip()
+        to_phone_number_id = (metadata.get("phone_number_id") or "").strip()
 
         # Store inbound log (best-effort idempotency)
         if wa_message_id:
             if WhatsAppMessage.objects.filter(wa_message_id=wa_message_id, direction=WhatsAppMessage.Direction.INBOUND).exists():
                 continue
 
-        provider = _provider_for_display_number(to_display_number)
+        provider = _provider_for_phone_number_id(to_phone_number_id) or _provider_for_display_number(to_display_number)
         if provider is None:
             # Unknown recipient number -> ignore (could be the ops agent in the future)
             continue

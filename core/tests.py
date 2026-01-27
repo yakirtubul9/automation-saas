@@ -1207,6 +1207,7 @@ class WhatsAppClientAgentTests(TestCase):
             display_name="Dr WA",
             specialty=self.spec,
             whatsapp_number="+972500000099",
+            whatsapp_phone_number_id="PNID_TEST_099",
         )
         self.service = Service.objects.create(business=self.business, name="Consult", specialty=self.spec, duration_minutes=30)
 
@@ -1242,7 +1243,7 @@ class WhatsAppClientAgentTests(TestCase):
                     "changes": [
                         {
                             "value": {
-                                "metadata": {"display_phone_number": self.provider.whatsapp_number},
+                                "metadata": {"display_phone_number": self.provider.whatsapp_number, "phone_number_id": self.provider.whatsapp_phone_number_id},
                                 "contacts": [{"profile": {"name": "Test User"}}],
                                 "messages": [
                                     {

@@ -75,13 +75,6 @@ def _default_cc() -> Optional[str]:
 
 
 def _send_text(*, business: Business, provider: Optional[Provider], client: Optional[Client], to_number: str, body: str) -> str:
-    """Send WhatsApp text and persist an outbound log.
-
-    Why we log first:
-      - When sending fails (token/permissions/template/etc.), we still want an OUTBOUND row
-        so it's visible in /admin and we can diagnose quickly.
-      - The webhook handler should not crash because an outbound send failed.
-    """
     from_num = normalize_phone(getattr(provider, "whatsapp_number", ""), default_country_code=_default_cc())
     to_num = normalize_phone(to_number, default_country_code=_default_cc())
 
@@ -98,19 +91,25 @@ def _send_text(*, business: Business, provider: Optional[Provider], client: Opti
         raw_payload={"status": "sending"},
     )
 
+    wa = None
     try:
         wa = get_provider()
-        # template_name=="" forces TEXT mode even if env template exists.
         msg_id = wa.send(to=to_num, body=body, template_name="")
         out.wa_message_id = msg_id or ""
         out.raw_payload = {"status": "sent", "provider": wa.__class__.__name__}
         out.save(update_fields=["wa_message_id", "raw_payload"])
-        return msg_id
+        return msg_id or ""
     except Exception as e:
-        out.raw_payload = {"status": "failed", "provider": wa.__class__.__name__, "error": str(e)}
+        out.raw_payload = {
+            "status": "failed",
+            "provider": (wa.__class__.__name__ if wa else None),
+            "error_type": type(e).__name__,
+            "error": str(e),
+        }
         out.save(update_fields=["raw_payload"])
-        print(f"[WA SEND ERROR] to={to_num} err={e}", flush=True)
+        print(f"[WA SEND ERROR] to={to_num} err={type(e).__name__}: {e}", flush=True)
         return ""
+
 
 
 

@@ -75,21 +75,43 @@ def _default_cc() -> Optional[str]:
 
 
 def _send_text(*, business: Business, provider: Optional[Provider], client: Optional[Client], to_number: str, body: str) -> str:
-    """Send WhatsApp text and persist an outbound log."""
-    wa = get_provider()
-    msg_id = wa.send(to=to_number, body=body, template_name="")
-    WhatsAppMessage.objects.create(
+    """Send WhatsApp text and persist an outbound log.
+
+    Why we log first:
+      - When sending fails (token/permissions/template/etc.), we still want an OUTBOUND row
+        so it's visible in /admin and we can diagnose quickly.
+      - The webhook handler should not crash because an outbound send failed.
+    """
+    from_num = normalize_phone(getattr(provider, "whatsapp_number", ""), default_country_code=_default_cc())
+    to_num = normalize_phone(to_number, default_country_code=_default_cc())
+
+    out = WhatsAppMessage.objects.create(
         business=business,
         provider=provider,
         client=client,
         direction=WhatsAppMessage.Direction.OUTBOUND,
         purpose=WhatsAppMessage.Purpose.CLIENT_AGENT,
-        wa_message_id=msg_id or "",
-        from_number=normalize_phone(getattr(provider, "whatsapp_number", ""), default_country_code=_default_cc()),
-        to_number=normalize_phone(to_number, default_country_code=_default_cc()),
+        wa_message_id="",
+        from_number=from_num,
+        to_number=to_num,
         body=body,
+        raw_payload={"status": "sending"},
     )
-    return msg_id
+
+    wa = get_provider()
+    try:
+        # template_name=="" forces TEXT mode even if env template exists.
+        msg_id = wa.send(to=to_number, body=body, template_name="")
+        out.wa_message_id = msg_id or ""
+        out.raw_payload = {"status": "sent", "provider": wa.__class__.__name__}
+        out.save(update_fields=["wa_message_id", "raw_payload"])
+        return msg_id
+    except Exception as e:
+        out.raw_payload = {"status": "failed", "provider": wa.__class__.__name__, "error": str(e)}
+        out.save(update_fields=["raw_payload"])
+        print(f"[WA SEND ERROR] to={to_num} err={e}", flush=True)
+        return ""
+
 
 
 def _get_or_create_session(*, business: Business, provider: Provider, wa_from_number: str) -> ConversationSession:

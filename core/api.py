@@ -2201,6 +2201,15 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     # Import locally to keep module import graph simple.
     from core.agents.client_agent import handle_whatsapp_webhook_payload
 
-    handle_whatsapp_webhook_payload(payload)
+    try:
+        handle_whatsapp_webhook_payload(payload)
+    except Exception as e:
+        # Important: show the error in Render logs.
+        print(f"[WA WEBHOOK ERROR] {e}", flush=True)
+        logger.exception("WA webhook processing failed")
+        # Returning 500 makes Meta retry, which is safer than silently dropping messages.
+        return JsonResponse({"ok": False, "error": "processing_failed"}, status=500)
+
     return JsonResponse({"ok": True})
+
 

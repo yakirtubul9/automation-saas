@@ -521,39 +521,76 @@ def _execute_pending(*, business: Business, provider: Provider, client: Client, 
     pending = state.get("pending") or {}
     action = pending.get("action")
 
+    # אם אין pending תקין - אין מה לבצע
+    if not action:
+        session.state = {}
+        session.save(update_fields=["state", "updated_at"])
+        _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="לא מצאתי פעולה לאישור. אפשר להתחיל מחדש.")
+        return
+
     try:
         if action == "book":
             slot_id = int(pending.get("slot_id"))
             service_id = pending.get("service_id")
             service = Service.objects.filter(pk=service_id, business=business, is_active=True).first() if service_id else None
+
             slot = assign_client_to_slot_system(business=business, slot_id=slot_id, client=client, service=service)
+
+            # הצלחה: מנקים state
+            session.state = {}
+            session.save(update_fields=["state", "updated_at"])
+
             _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body=f"✅ נקבע תור ל-{_fmt_dt(business, slot.start_time)}.")
-        elif action == "cancel":
+            return
+
+        if action == "cancel":
             appt_id = int(pending.get("appointment_id"))
             appt = cancel_appointment_by_client_system(business=business, appointment_id=appt_id)
+
+            session.state = {}
+            session.save(update_fields=["state", "updated_at"])
+
             if appt.status == Appointment.Status.CANCELLATION_REQUESTED:
                 _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="🕒 בקשת הביטול נשלחה לצוות לאישור. תקבל/י עדכון בהקדם.")
             else:
                 _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="✅ התור בוטל.")
-        elif action == "reschedule":
+            return
+
+        if action == "reschedule":
             old_id = int(pending.get("appointment_id"))
-            slot_id = int(pending.get("slot_id"))
-            reschedule_appointment_system(business=business, old_appointment_id=old_id, new_slot_id=slot_id)
+            new_slot_id = int(pending.get("slot_id"))
+            reschedule_appointment_system(business=business, old_appointment_id=old_id, new_slot_id=new_slot_id)
+
+            session.state = {}
+            session.save(update_fields=["state", "updated_at"])
+
             _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="✅ עודכן. התור הועבר לחלון החדש.")
-        else:
-            _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="משהו השתבש. אפשר לנסות שוב.")
+            return
+
+        # פעולה לא מוכרת
+        session.state = {}
+        session.save(update_fields=["state", "updated_at"])
+        _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="משהו השתבש. אפשר לנסות שוב.")
+        return
+
     except ValueError as e:
         code = str(e)
+        print(f"[CLIENT_AGENT] execute_pending ValueError action={action} code={code} pending={pending}", flush=True)
+
         if code in {"slot_not_available", "provider_conflict", "room_conflict", "room_block"}:
-            _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="האופציה לא זמינה יותר. ננסה חלונות אחרים.")
+            # פה *לא* מנקים הכל — מציעים חלופות, ומשאירים state חדש ש-_offer_slots יכתוב
             state.pop("pending", None)
             session.state = state
             session.save(update_fields=["state", "updated_at"])
+
+            _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="האופציה לא זמינה יותר. ננסה חלונות אחרים.")
             if action == "book":
                 _offer_slots(business=business, provider=provider, client=client, session=session)
             return
-        _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="לא הצלחתי לבצע את הפעולה. אפשר לנסות שוב או לפנות לצוות.")
-    finally:
-        # Clear state after execution
+
+        # כשל אחר: מנקים state ומחזירים הודעה
         session.state = {}
         session.save(update_fields=["state", "updated_at"])
+        _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="לא הצלחתי לבצע את הפעולה. אפשר לנסות שוב או לפנות לצוות.")
+        return
+

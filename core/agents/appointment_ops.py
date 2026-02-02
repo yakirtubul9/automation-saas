@@ -15,6 +15,8 @@ RESERVED_STATUS = getattr(Appointment.Status, "RESERVED", "reserved")
 
 def _overlaps_qs(*, business: Business, start, end, provider_id: Optional[int] = None, room_id: Optional[int] = None):
     qs = Appointment.objects.filter(business=business, start_time__lt=end, end_time__gt=start)
+    # Conflicts should ignore cancelled appointments (they no longer occupy the calendar).
+    qs = qs.exclude(status__in=[Appointment.Status.CANCELLED_CLIENT, Appointment.Status.CANCELLED_STAFF])
     if provider_id is not None:
         qs = qs.filter(provider_id=provider_id)
     if room_id is not None:

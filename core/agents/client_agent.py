@@ -98,10 +98,10 @@ def _send_text(*, business: Business, provider: Optional[Provider], client: Opti
         raw_payload={"status": "sending"},
     )
 
-    wa = get_provider()
     try:
+        wa = get_provider()
         # template_name=="" forces TEXT mode even if env template exists.
-        msg_id = wa.send(to=to_number, body=body, template_name="")
+        msg_id = wa.send(to=to_num, body=body, template_name="")
         out.wa_message_id = msg_id or ""
         out.raw_payload = {"status": "sent", "provider": wa.__class__.__name__}
         out.save(update_fields=["wa_message_id", "raw_payload"])

@@ -1,5 +1,6 @@
 from __future__ import annotations
-
+import re
+import traceback
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -27,6 +28,13 @@ from core.models import (
 )
 from core.notifications import get_provider
 
+_YN_CLEAN_RE = re.compile(r"[^\w\u0590-\u05FF]+", re.UNICODE)
+
+def _norm_yn(text: str) -> str:
+    t = (text or "").strip().lower()
+    # מוחק סימני פיסוק/אימוג'ים/סוגריים וכו', משאיר אותיות/ספרות/עברית
+    t = _YN_CLEAN_RE.sub("", t)
+    return t
 
 YES_WORDS = {"כן", "מאשר", "מאשרת", "ok", "okay", "y", "yes", "1"}
 NO_WORDS = {"לא", "דוחה", "reject", "no", "0", "2"}
@@ -207,6 +215,10 @@ def handle_whatsapp_webhook_payload(payload: Dict[str, Any]) -> None:
         client = _get_or_create_client(business=business, wa_from_number=from_number, display_name=display_name)
 
         text = _extract_text(msg)
+        print(
+            f"[CLIENT_AGENT] inbound wa_id={wa_message_id} from={from_number} to={to_display_number} type={msg.get('type')} text={text!r}",
+            flush=True,
+        )
         WhatsAppMessage.objects.create(
             business=business,
             provider=provider,
@@ -237,15 +249,13 @@ def handle_whatsapp_webhook_payload(payload: Dict[str, Any]) -> None:
 def _process_text(*, business: Business, provider: Provider, client: Client, session: ConversationSession, text: str) -> None:
     state: Dict[str, Any] = dict(session.state or {})
     t = (text or "").strip()
-    lower = t.lower()
+    token = _norm_yn(t)
 
-    # 1) Pending confirmation
-    pending = state.get("pending")
     if isinstance(pending, dict) and pending.get("action"):
-        if lower in YES_WORDS:
+        if token in YES_WORDS:
             _execute_pending(business=business, provider=provider, client=client, session=session)
             return
-        if lower in NO_WORDS:
+        if token in NO_WORDS:
             state.pop("pending", None)
             session.state = state
             session.save(update_fields=["state", "updated_at"])
@@ -593,3 +603,21 @@ def _execute_pending(*, business: Business, provider: Provider, client: Client, 
         _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="לא הצלחתי לבצע את הפעולה. אפשר לנסות שוב או לפנות לצוות.")
         return
 
+    except Exception:
+        print(
+            f"[CLIENT_AGENT] execute_pending CRASH action={action} pending={pending}",
+            flush=True,
+        )
+        print(traceback.format_exc(), flush=True)
+
+        session.state = {}
+        session.save(update_fields=["state", "updated_at"])
+
+        _send_text(
+            business=business,
+            provider=provider,
+            client=client,
+            to_number=client.phone_number,
+            body="משהו השתבש בביצוע הפעולה. אפשר לנסות שוב או לפנות לצוות.",
+        )
+        return

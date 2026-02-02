@@ -48,9 +48,15 @@ def assign_client_to_slot_system(
     service: Optional[Service] = None,
     actor_user: Optional[User] = None,
 ):
-    """Assign a client to a reserved slot without relying on a logged-in user."""
+    """Assign a client to a reserved slot without relying on a logged-in user.
+
+    NOTE (Postgres): avoid combining select_for_update() with select_related() on nullable FKs.
+    Postgres rejects `FOR UPDATE` when the query includes a LEFT OUTER JOIN (nullable side).
+    We lock the Appointment row only, and let Django lazily fetch related rows if needed.
+    """
     with transaction.atomic():
-        slot = Appointment.objects.select_for_update().filter(pk=slot_id, business=business).select_related("provider", "room").first()
+        # Lock the slot row only (no joins here).
+        slot = Appointment.objects.select_for_update().filter(pk=slot_id, business=business).first()
         if not slot:
             raise ValueError("slot_not_found")
         if slot.status != RESERVED_STATUS or slot.client_id is not None:
@@ -119,8 +125,10 @@ def assign_client_to_slot_system(
             from core.models import WaitlistOffer
 
             now = timezone.now()
-            (WaitlistOffer.objects.filter(slot_id=slot.id, status=WaitlistOffer.Status.PENDING)
-             .update(status=WaitlistOffer.Status.CANCELLED, decided_at=now, decision_note="slot_assigned"))
+            (
+                WaitlistOffer.objects.filter(slot_id=slot.id, status=WaitlistOffer.Status.PENDING)
+                .update(status=WaitlistOffer.Status.CANCELLED, decided_at=now, decision_note="slot_assigned")
+            )
         except Exception:
             pass
 
@@ -152,9 +160,12 @@ def cancel_appointment_by_client_system(
     appointment_id: int,
     actor_user: Optional[User] = None,
 ):
-    """Cancel (or request cancel) for an appointment, following business policy."""
+    """Cancel (or request cancel) for an appointment, following business policy.
+
+    NOTE (Postgres): same as assign_client_to_slot_system — lock without joins.
+    """
     with transaction.atomic():
-        appt = Appointment.objects.select_for_update().select_related("provider", "room", "service").filter(pk=appointment_id, business=business).first()
+        appt = Appointment.objects.select_for_update().filter(pk=appointment_id, business=business).first()
         if not appt:
             raise ValueError("appointment_not_found")
 
@@ -227,15 +238,18 @@ def reschedule_appointment_system(
     new_slot_id: int,
     actor_user: Optional[User] = None,
 ):
-    """Reschedule by moving the client to a new reserved slot and cancelling the old appointment."""
+    """Reschedule by moving the client to a new reserved slot and cancelling the old appointment.
+
+    NOTE (Postgres): lock each Appointment row without joins (no select_related with FOR UPDATE).
+    """
     with transaction.atomic():
-        old_appt = Appointment.objects.select_for_update().filter(pk=old_appointment_id, business=business).select_related("client", "service").first()
+        old_appt = Appointment.objects.select_for_update().filter(pk=old_appointment_id, business=business).first()
         if not old_appt:
             raise ValueError("appointment_not_found")
         if old_appt.client_id is None:
             raise ValueError("not_a_client_appointment")
 
-        new_slot = Appointment.objects.select_for_update().filter(pk=new_slot_id, business=business).select_related("provider", "room").first()
+        new_slot = Appointment.objects.select_for_update().filter(pk=new_slot_id, business=business).first()
         if not new_slot:
             raise ValueError("slot_not_found")
 

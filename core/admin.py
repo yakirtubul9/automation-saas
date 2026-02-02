@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.utils import timezone
-
+import json
 from .models import (
     Appointment,
     AppointmentChangeProposal,

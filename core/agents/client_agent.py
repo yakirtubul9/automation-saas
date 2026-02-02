@@ -249,6 +249,7 @@ def handle_whatsapp_webhook_payload(payload: Dict[str, Any]) -> None:
 def _process_text(*, business: Business, provider: Provider, client: Client, session: ConversationSession, text: str) -> None:
     state: Dict[str, Any] = dict(session.state or {})
     t = (text or "").strip()
+    pending = state.get("pending")
     token = _norm_yn(t)
 
     if isinstance(pending, dict) and pending.get("action"):

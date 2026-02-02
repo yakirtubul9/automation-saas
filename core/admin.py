@@ -131,10 +131,23 @@ class WhatsAppMessageAdmin(admin.ModelAdmin):
 
 @admin.register(ConversationSession)
 class ConversationSessionAdmin(admin.ModelAdmin):
-    list_display = ("business", "provider", "wa_from_number", "expires_at", "updated_at")
+    list_display = (
+        "business",
+        "provider",
+        "wa_from_number",
+        "expires_at",
+        "updated_at",
+        "state_preview",
+    )
+    list_display_links = ("wa_from_number",)  # שיהיה אפשר להיכנס לעריכה דרך המספר
     list_filter = ("business",)
     search_fields = ("wa_from_number", "provider__display_name")
 
+    def state_preview(self, obj):
+        s = json.dumps(obj.state or {}, ensure_ascii=False)
+        return (s[:140] + "…") if len(s) > 140 else s
+
+    state_preview.short_description = "state"
 
 
 

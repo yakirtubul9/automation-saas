@@ -1308,3 +1308,98 @@ class WhatsAppClientAgentTests(TestCase):
 
         appt.refresh_from_db()
         self.assertIn(appt.status, (Appointment.Status.CANCELLED_CLIENT, Appointment.Status.CANCELLATION_REQUESTED))
+
+
+class OpsAgentTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.owner = User.objects.create_user(username="owner1", password="pw")
+        self.staff = User.objects.create_user(username="staff1", password="pw")
+        self.business = Business.objects.create(owner=self.owner, name="Clinic", timezone="Asia/Jerusalem")
+        self.business.ops_whatsapp_phone_number_id = "OPS_PHONE_ID_1"
+        self.business.ops_whatsapp_display_number = "+15550001111"
+        self.business.save(update_fields=["ops_whatsapp_phone_number_id", "ops_whatsapp_display_number"])
+
+        # staff membership with whitelist number
+        self.staff_membership = BusinessMembership.objects.create(
+            business=self.business,
+            user=self.staff,
+            role=BusinessMembership.Role.STAFF,
+            whatsapp_number="+972501112233",
+        )
+
+        self.room1 = Room.objects.create(business=self.business, name="1", specialty=None)
+        self.room2 = Room.objects.create(business=self.business, name="2", specialty=None)
+
+        self.provider_user = User.objects.create_user(username="dr", password="pw")
+        self.provider = Provider.objects.create(business=self.business, display_name="Dr X", whatsapp_number="+972500000000")
+
+        # one appointment today
+        now = timezone.now()
+        self.appt = Appointment.objects.create(
+            business=self.business,
+            provider=self.provider,
+            room=self.room1,
+            start_time=now + timedelta(hours=2),
+            end_time=now + timedelta(hours=3),
+            status=Appointment.Status.SCHEDULED,
+        )
+
+    def _payload(self, *, wa_id: str, from_number: str, body: str) -> dict:
+        return {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {
+                                    "display_phone_number": self.business.ops_whatsapp_display_number,
+                                    "phone_number_id": self.business.ops_whatsapp_phone_number_id,
+                                },
+                                "messages": [
+                                    {
+                                        "id": wa_id,
+                                        "from": from_number,
+                                        "type": "text",
+                                        "text": {"body": body},
+                                    }
+                                ],
+                                "contacts": [{"profile": {"name": "OpsUser"}}],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+    @override_settings(NOTIFICATION_PROVIDER="mock")
+    def test_ops_show_schedule_masks_clients(self):
+        from core.agents.ops_agent import handle_whatsapp_webhook_payload
+
+        payload = self._payload(wa_id="m1", from_number=self.staff_membership.whatsapp_number, body="תציג היום")
+        handle_whatsapp_webhook_payload(payload)
+
+        out = WhatsAppMessage.objects.filter(direction=WhatsAppMessage.Direction.OUTBOUND, purpose=WhatsAppMessage.Purpose.OPS_AGENT).order_by("-id").first()
+        self.assertIsNotNone(out)
+        self.assertIn(f"#{self.appt.id}", out.body)
+        # Should not include any client information
+        self.assertNotIn("972", out.body)
+
+    @override_settings(NOTIFICATION_PROVIDER="mock")
+    def test_ops_close_room_requires_confirmation_and_creates_block(self):
+        from core.agents.ops_agent import handle_whatsapp_webhook_payload
+
+        # Ask to close room
+        p1 = self._payload(wa_id="m2", from_number=self.staff_membership.whatsapp_number, body="סגור חדר 1 היום 10-12 סיבה: תקלה")
+        handle_whatsapp_webhook_payload(p1)
+
+        # Confirmation should be requested
+        out1 = WhatsAppMessage.objects.filter(direction=WhatsAppMessage.Direction.OUTBOUND, purpose=WhatsAppMessage.Purpose.OPS_AGENT).order_by("-id").first()
+        self.assertIsNotNone(out1)
+        self.assertIn("לאשר", out1.body)
+
+        # Confirm
+        p2 = self._payload(wa_id="m3", from_number=self.staff_membership.whatsapp_number, body="כן")
+        handle_whatsapp_webhook_payload(p2)
+
+        self.assertTrue(RoomBlock.objects.filter(business=self.business, room=self.room1, is_active=True).exists())

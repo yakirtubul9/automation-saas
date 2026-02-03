@@ -10,6 +10,11 @@ class Business(models.Model):
     timezone = models.CharField(max_length=64, default="Asia/Jerusalem")
     # 0 = allow automatic client cancellation anytime
     auto_cancel_cutoff_hours = models.PositiveIntegerField(default=0)
+
+    # Ops / clinic WhatsApp number (Agent 2: Owner/Staff)
+    # Use WhatsApp Cloud API phone_number_id for reliable webhook routing.
+    ops_whatsapp_display_number = models.CharField(max_length=50, blank=True, default="")
+    ops_whatsapp_phone_number_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self) -> str:
@@ -619,6 +624,33 @@ class ConversationSession(models.Model):
 
     def __str__(self) -> str:
         return f"Session({self.provider_id} {self.wa_from_number})"
+
+
+class OpsConversationSession(models.Model):
+    """Short-lived state for Ops WhatsApp agent (Owner/Staff).
+
+    Kept separate from ConversationSession to avoid coupling to Provider/patient flows.
+    """
+
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="ops_conversation_sessions")
+    membership = models.ForeignKey(
+        BusinessMembership,
+        on_delete=models.CASCADE,
+        related_name="ops_conversation_sessions",
+        help_text="Owner/Staff membership that initiated the conversation",
+    )
+    wa_from_number = models.CharField(max_length=50)
+    state = models.JSONField(default=dict, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("business", "wa_from_number")
+
+    def __str__(self) -> str:
+        return f"OpsSession({self.business_id}, {self.wa_from_number})"
+
 
 
 class Reminder(models.Model):

@@ -2199,10 +2199,93 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         return _json_error(400, "bad_json", "Body must be valid JSON")
 
     # Import locally to keep module import graph simple.
-    from core.agents.client_agent import handle_whatsapp_webhook_payload
+    from core.agents.client_agent import handle_whatsapp_webhook_payload as handle_client
+    from core.agents.ops_agent import handle_whatsapp_webhook_payload as handle_ops
+
+    def _extract_first_inbound_text_and_sender(p: dict) -> tuple[str, str, str]:
+        """Return (text, sender_wa, phone_number_id). Best-effort; empty strings if missing."""
+        try:
+            entry0 = (p.get("entry") or [])[0] or {}
+            change0 = (entry0.get("changes") or [])[0] or {}
+            value = change0.get("value") or {}
+
+            meta = value.get("metadata") or {}
+            phone_number_id = str(meta.get("phone_number_id") or "")
+
+            msgs = value.get("messages") or []
+            if not msgs:
+                return "", "", phone_number_id
+
+            msg0 = msgs[0] or {}
+            sender = str(msg0.get("from") or "")
+
+            mtype = msg0.get("type")
+            if mtype == "text":
+                body = ((msg0.get("text") or {}).get("body") or "")
+                return str(body), sender, phone_number_id
+
+            # Interactive replies (buttons / lists)
+            if mtype == "interactive":
+                inter = msg0.get("interactive") or {}
+                itype = inter.get("type")
+                if itype == "button_reply":
+                    title = ((inter.get("button_reply") or {}).get("title") or "")
+                    return str(title), sender, phone_number_id
+                if itype == "list_reply":
+                    title = ((inter.get("list_reply") or {}).get("title") or "")
+                    return str(title), sender, phone_number_id
+
+            return "", sender, phone_number_id
+        except Exception:
+            return "", "", ""
+
+    def _is_ops_sender(*, business: Business, sender_wa: str) -> bool:
+        """Hard RBAC: only whitelisted staff/owner numbers."""
+        if not sender_wa:
+            return False
+        # Normalize: stored numbers are typically +E164, inbound is digits without '+'.
+        # We'll compare by digits suffix to be tolerant.
+        sender_digits = "".join(ch for ch in sender_wa if ch.isdigit())
+        if not sender_digits:
+            return False
+
+        qs = BusinessMembership.objects.filter(
+            business=business,
+            role__in=[BusinessMembership.Role.OWNER, BusinessMembership.Role.STAFF],
+        ).exclude(whatsapp_number__isnull=True).exclude(whatsapp_number__exact="")
+
+        for num in qs.values_list("whatsapp_number", flat=True):
+            num_digits = "".join(ch for ch in str(num) if ch.isdigit())
+            if not num_digits:
+                continue
+            # Match full or last 9-12 digits (handles country code formats)
+            if sender_digits == num_digits or sender_digits.endswith(num_digits[-9:]):
+                return True
+        return False
+
+    def _should_route_to_ops(*, text_in: str) -> bool:
+        """Keyword-based routing requested for Test-number mode."""
+        t = (text_in or "").strip()
+        if not t:
+            return False
+        # NOTE: 'בעל' is very generic and can create false positives. Keep as requested.
+        keywords = ["בעלים", "בעל", "מנהל"]
+        return any(k in t for k in keywords)
+
+    inbound_text, sender_wa, phone_number_id = _extract_first_inbound_text_and_sender(payload)
+
+    # Resolve business by ops phone_number_id when possible (Test number can share this id).
+    business = None
+    if phone_number_id:
+        business = Business.objects.filter(ops_whatsapp_phone_number_id=phone_number_id).order_by("id").first()
+    if business is None:
+        business = Business.objects.order_by("id").first()
 
     try:
-        handle_whatsapp_webhook_payload(payload)
+        if business and _should_route_to_ops(text_in=inbound_text) and _is_ops_sender(business=business, sender_wa=sender_wa):
+            handle_ops(payload)
+        else:
+            handle_client(payload)
     except Exception as e:
         # Important: show the error in Render logs.
         print(f"[WA WEBHOOK ERROR] {e}", flush=True)

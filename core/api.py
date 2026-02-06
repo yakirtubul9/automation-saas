@@ -2184,6 +2184,15 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
     try:
         payload = json.loads(request.body.decode("utf-8") or "{}")
+    from django.db import connection
+    try:
+        db = connection.settings_dict
+        print(
+            f"[WA DB] ENGINE={db.get('ENGINE')} NAME={db.get('NAME')} HOST={db.get('HOST')} USER={db.get('USER')}",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"[WA DB] failed: {e}", flush=True)
     except json.JSONDecodeError:
         return _json_error(400, "bad_json", "Body must be valid JSON")
 

@@ -2144,11 +2144,11 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     """WhatsApp Cloud webhook.
 
     GET: verification (hub.challenge)
-    POST: inbound messages -> Stage 8 client agent
+    POST: inbound messages -> route between OPS agent (Stage 9) and Client agent (Stage 8).
 
     Notes:
       - CSRF exempt (called by Meta)
-      - The agent is deterministic and actions-only in this stage.
+      - Routing is deterministic: keyword gate + hard RBAC whitelist.
     """
 
     def _mask(v: object) -> str:
@@ -2168,7 +2168,6 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         expected_env = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "") or ""
         expected = expected_settings or expected_env
 
-        # Print to stdout so it appears in Render logs even if Django logging isn't configured.
         print(
             f"WA VERIFY debug: mode={mode!r} token={_mask(token)} challenge={challenge!r} "
             f"expected_settings={_mask(expected_settings)} expected_env={_mask(expected_env)} expected_used={_mask(expected)}",
@@ -2185,7 +2184,6 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         )
 
         if mode == "subscribe" and expected and token == expected and challenge is not None:
-            # Meta expects a 200 with the challenge echoed back (plain text).
             return HttpResponse(challenge, content_type="text/plain", status=200)
 
         return _json_error(403, "forbidden", "Verification failed")
@@ -2239,54 +2237,71 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         except Exception:
             return "", "", ""
 
-    def _is_ops_sender(*, business: Business, sender_wa: str) -> bool:
-        """Hard RBAC: only whitelisted staff/owner numbers."""
-        if not sender_wa:
-            return False
-        # Normalize: stored numbers are typically +E164, inbound is digits without '+'.
-        # We'll compare by digits suffix to be tolerant.
-        sender_digits = "".join(ch for ch in sender_wa if ch.isdigit())
-        if not sender_digits:
-            return False
-
-        qs = BusinessMembership.objects.filter(
-            business=business,
-            role__in=[BusinessMembership.Role.OWNER, BusinessMembership.Role.STAFF],
-        ).exclude(whatsapp_number__isnull=True).exclude(whatsapp_number__exact="")
-
-        for num in qs.values_list("whatsapp_number", flat=True):
-            num_digits = "".join(ch for ch in str(num) if ch.isdigit())
-            print(f"[WA RBAC] sender_digits={sender_digits} candidate_digits={num_digits}", flush=True)
-            if not num_digits:
-                continue
-            # Match full or last 9-12 digits (handles country code formats)
-            if sender_digits == num_digits or sender_digits.endswith(num_digits[-9:]):
-                return True
-        return False
-
     def _should_route_to_ops(*, text_in: str) -> bool:
         """Keyword-based routing requested for Test-number mode."""
         t = (text_in or "").strip()
         if not t:
             return False
-        # NOTE: 'בעל' is very generic and can create false positives. Keep as requested.
+        # NOTE: 'בעל' is generic and can create false positives. Keep as requested.
         keywords = ["בעלים", "בעל", "מנהל"]
         return any(k in t for k in keywords)
+
+    def _is_ops_sender(*, business: Business, sender_wa: str) -> bool:
+        """Hard RBAC: only whitelisted staff/owner numbers for this business."""
+        if not business or not sender_wa:
+            return False
+
+        sender_digits = "".join(ch for ch in str(sender_wa) if ch.isdigit())
+        if not sender_digits:
+            return False
+
+        qs = (
+            BusinessMembership.objects.filter(
+                business=business,
+                role__in=[BusinessMembership.Role.OWNER, BusinessMembership.Role.STAFF],
+            )
+            .exclude(whatsapp_number__isnull=True)
+            .exclude(whatsapp_number__exact="")
+        )
+
+        for num in qs.values_list("whatsapp_number", flat=True):
+            num_digits = "".join(ch for ch in str(num) if ch.isdigit())
+            if not num_digits:
+                continue
+            # Match full digits OR suffix match (handles +E164 vs plain digits)
+            if sender_digits == num_digits:
+                return True
+            if len(num_digits) >= 9 and sender_digits.endswith(num_digits[-9:]):
+                return True
+        return False
 
     inbound_text, sender_wa, phone_number_id = _extract_first_inbound_text_and_sender(payload)
 
     # Resolve business by ops phone_number_id when possible (Test number can share this id).
-    print(
-        f"[WA ROUTER] text={inbound_text!r} sender={sender_wa} phone_number_id={phone_number_id} business_id={getattr(business, 'id', None)}",
-        flush=True)
-    print(
-        f"[WA ROUTER] kw={_should_route_to_ops(text_in=inbound_text)} is_ops_sender={_is_ops_sender(business=business, sender_wa=sender_wa)}",
-        flush=True)
-    business = None
-    if phone_number_id:
-        business = Business.objects.filter(ops_whatsapp_phone_number_id=phone_number_id).order_by("id").first()
-    if business is None:
-        business = Business.objects.order_by("id").first()
+    business: Business | None = None
+    try:
+        if phone_number_id:
+            business = (
+                Business.objects.filter(ops_whatsapp_phone_number_id=str(phone_number_id))
+                .order_by("id")
+                .first()
+            )
+        if business is None:
+            business = Business.objects.order_by("id").first()
+    except Exception:
+        business = None
+
+    # Debug routing — safe prints (never crash).
+    try:
+        kw = _should_route_to_ops(text_in=inbound_text)
+        is_ops = _is_ops_sender(business=business, sender_wa=sender_wa) if business else False
+        print(
+            f"[WA ROUTER] text={inbound_text!r} sender={sender_wa} phone_number_id={phone_number_id} "
+            f"business_id={getattr(business, 'id', None)} kw={kw} is_ops_sender={is_ops}",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"[WA ROUTER] debug_failed err={e}", flush=True)
 
     try:
         if business and _should_route_to_ops(text_in=inbound_text) and _is_ops_sender(business=business, sender_wa=sender_wa):
@@ -2294,12 +2309,9 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         else:
             handle_client(payload)
     except Exception as e:
-        # Important: show the error in Render logs.
         print(f"[WA WEBHOOK ERROR] {e}", flush=True)
         logger.exception("WA webhook processing failed")
-        # Returning 500 makes Meta retry, which is safer than silently dropping messages.
         return JsonResponse({"ok": False, "error": "processing_failed"}, status=500)
 
     return JsonResponse({"ok": True})
-
 

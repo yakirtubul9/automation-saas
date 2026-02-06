@@ -2311,6 +2311,7 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         # Example: OPS_WHATSAPP_WHITELIST=972502221246,9725xxxxxxx
         wl_raw = os.getenv('OPS_WHATSAPP_WHITELIST', '') or ''
         if wl_raw.strip():
+            print(f"[WA RBAC] env_whitelist_raw={wl_raw!r} sender_digits={sender_digits}", flush=True)
             for item in wl_raw.split(','):
                 cand = _digits(item.strip())
                 if not cand:
@@ -2321,6 +2322,8 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
 
         try:
+            total_all = BusinessMembership.objects.count()
+            print(f"[WA RBAC] memberships_total_all={total_all}", flush=True)
             qs_all = BusinessMembership.objects.filter(business_id=business.id)
             total_for_business = qs_all.count()
             with_numbers = qs_all.exclude(whatsapp_number__isnull=True).exclude(whatsapp_number__exact="")

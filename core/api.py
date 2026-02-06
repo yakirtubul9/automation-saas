@@ -1,5 +1,5 @@
 from __future__ import annotations
-from django.db import connection
+
 import json
 import os
 import logging
@@ -422,6 +422,15 @@ def _parse_reserve_slot_input(request: HttpRequest, business: Business) -> Reser
     except json.JSONDecodeError:
         return _json_error(400, "bad_json", "Body must be valid JSON")
 
+    # Debug: confirm which DB this process is connected to (helps when Admin and webhook seem out of sync).
+    try:
+        from django.db import connection
+        db = getattr(connection, 'settings_dict', {}) or {}
+        print(f"[WA DB] ENGINE={db.get('ENGINE')} NAME={db.get('NAME')} HOST={db.get('HOST')}", flush=True)
+    except Exception as e:
+        print(f"[WA DB] failed: {e}", flush=True)
+
+
     start_raw = body.get("start_time")
     end_raw = body.get("end_time")
     provider_id = body.get("provider_id")
@@ -590,6 +599,15 @@ def _parse_reserve_slots_input(request: HttpRequest, business: Business) -> Rese
         body = json.loads(request.body.decode("utf-8") or "{}")
     except json.JSONDecodeError:
         return _json_error(400, "bad_json", "Body must be valid JSON")
+
+    # Debug: confirm which DB this process is connected to (helps when Admin and webhook seem out of sync).
+    try:
+        from django.db import connection
+        db = getattr(connection, 'settings_dict', {}) or {}
+        print(f"[WA DB] ENGINE={db.get('ENGINE')} NAME={db.get('NAME')} HOST={db.get('HOST')}", flush=True)
+    except Exception as e:
+        print(f"[WA DB] failed: {e}", flush=True)
+
 
     start_raw = body.get("start_time")
     end_raw = body.get("end_time")
@@ -898,6 +916,15 @@ def _parse_room_block_input(request: HttpRequest, business: Business) -> RoomBlo
     except json.JSONDecodeError:
         return _json_error(400, "bad_json", "Body must be valid JSON")
 
+    # Debug: confirm which DB this process is connected to (helps when Admin and webhook seem out of sync).
+    try:
+        from django.db import connection
+        db = getattr(connection, 'settings_dict', {}) or {}
+        print(f"[WA DB] ENGINE={db.get('ENGINE')} NAME={db.get('NAME')} HOST={db.get('HOST')}", flush=True)
+    except Exception as e:
+        print(f"[WA DB] failed: {e}", flush=True)
+
+
     room_id = body.get("room_id")
     start_raw = body.get("start_time")
     end_raw = body.get("end_time")
@@ -1050,6 +1077,15 @@ def _parse_waitlist_entry_input(request: HttpRequest) -> WaitlistEntryInput | Js
         body = json.loads(request.body.decode("utf-8") or "{}")
     except json.JSONDecodeError:
         return _json_error(400, "bad_json", "Body must be valid JSON")
+
+    # Debug: confirm which DB this process is connected to (helps when Admin and webhook seem out of sync).
+    try:
+        from django.db import connection
+        db = getattr(connection, 'settings_dict', {}) or {}
+        print(f"[WA DB] ENGINE={db.get('ENGINE')} NAME={db.get('NAME')} HOST={db.get('HOST')}", flush=True)
+    except Exception as e:
+        print(f"[WA DB] failed: {e}", flush=True)
+
 
     client_id = body.get("client_id")
     if client_id is None:
@@ -1363,6 +1399,15 @@ def _parse_assign_client_input(request: HttpRequest) -> AssignClientInput | Json
         body = json.loads(request.body.decode("utf-8") or "{}")
     except json.JSONDecodeError:
         return _json_error(400, "bad_json", "Body must be valid JSON")
+
+    # Debug: confirm which DB this process is connected to (helps when Admin and webhook seem out of sync).
+    try:
+        from django.db import connection
+        db = getattr(connection, 'settings_dict', {}) or {}
+        print(f"[WA DB] ENGINE={db.get('ENGINE')} NAME={db.get('NAME')} HOST={db.get('HOST')}", flush=True)
+    except Exception as e:
+        print(f"[WA DB] failed: {e}", flush=True)
+
 
     slot_id = body.get("slot_id")
     client_id = body.get("client_id")
@@ -2184,16 +2229,17 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
     try:
         payload = json.loads(request.body.decode("utf-8") or "{}")
-    try:
-        db = connection.settings_dict
-        print(
-            f"[WA DB] ENGINE={db.get('ENGINE')} NAME={db.get('NAME')} HOST={db.get('HOST')} USER={db.get('USER')}",
-            flush=True,
-        )
-    except Exception as e:
-        print(f"[WA DB] failed: {e}", flush=True)
     except json.JSONDecodeError:
         return _json_error(400, "bad_json", "Body must be valid JSON")
+
+    # Debug: confirm which DB this process is connected to (helps when Admin and webhook seem out of sync).
+    try:
+        from django.db import connection
+        db = getattr(connection, 'settings_dict', {}) or {}
+        print(f"[WA DB] ENGINE={db.get('ENGINE')} NAME={db.get('NAME')} HOST={db.get('HOST')}", flush=True)
+    except Exception as e:
+        print(f"[WA DB] failed: {e}", flush=True)
+
 
     # Import locally to keep module import graph simple.
     from core.agents.client_agent import handle_whatsapp_webhook_payload as handle_client
@@ -2260,6 +2306,19 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         sender_digits = _digits(sender_wa)
         if not sender_digits:
             return False
+
+        # Fallback whitelist for Test-number mode / bootstrap (comma-separated digits or E164).
+        # Example: OPS_WHATSAPP_WHITELIST=972502221246,9725xxxxxxx
+        wl_raw = os.getenv('OPS_WHATSAPP_WHITELIST', '') or ''
+        if wl_raw.strip():
+            for item in wl_raw.split(','):
+                cand = _digits(item.strip())
+                if not cand:
+                    continue
+                if sender_digits == cand or sender_digits.endswith(cand) or cand.endswith(sender_digits):
+                    print(f"[WA RBAC] env_whitelist_match sender={sender_digits}", flush=True)
+                    return True
+
 
         try:
             qs_all = BusinessMembership.objects.filter(business_id=business.id)
@@ -2339,5 +2398,3 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"ok": False, "error": "processing_failed"}, status=500)
 
     return JsonResponse({"ok": True})
-
-

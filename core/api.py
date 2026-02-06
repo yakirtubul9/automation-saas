@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from django.db import connection
 import json
 import os
 import logging
@@ -2184,7 +2184,6 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
     try:
         payload = json.loads(request.body.decode("utf-8") or "{}")
-    from django.db import connection
     try:
         db = connection.settings_dict
         print(

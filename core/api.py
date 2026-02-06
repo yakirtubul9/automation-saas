@@ -2247,7 +2247,12 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         return any(k in t for k in keywords)
 
     def _is_ops_sender(*, business: Business, sender_wa: str) -> bool:
-        """Hard RBAC: only whitelisted staff/owner numbers for this business."""
+        """Hard RBAC: only whitelisted staff/owner numbers for this business.
+
+        We intentionally do *not* rely solely on enum values, because DB role values may differ
+        by casing or legacy labels (e.g. 'Owner' vs 'owner'). We treat 'owner'/'staff' in a
+        case-insensitive manner.
+        """
         if not business or not sender_wa:
             return False
 
@@ -2255,24 +2260,32 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         if not sender_digits:
             return False
 
-        qs = (
-            BusinessMembership.objects.filter(
-                business=business,
-                role__in=[BusinessMembership.Role.OWNER, BusinessMembership.Role.STAFF],
-            )
+        # Pull candidate memberships with a non-empty WhatsApp number.
+        members = (
+            BusinessMembership.objects.filter(business=business)
             .exclude(whatsapp_number__isnull=True)
             .exclude(whatsapp_number__exact="")
+            .values_list("role", "whatsapp_number")
         )
 
-        for num in qs.values_list("whatsapp_number", flat=True):
+        for role_val, num in members:
+            role_s = str(role_val or "").strip().lower()
+            if role_s not in {"owner", "staff"} and ("owner" not in role_s and "staff" not in role_s):
+                continue
+
             num_digits = "".join(ch for ch in str(num) if ch.isdigit())
             if not num_digits:
                 continue
-            # Match full digits OR suffix match (handles +E164 vs plain digits)
+
+            # Exact match (digits-only), or suffix match on the last N digits (N=9..12).
             if sender_digits == num_digits:
                 return True
-            if len(num_digits) >= 9 and sender_digits.endswith(num_digits[-9:]):
-                return True
+
+            n = min(len(sender_digits), len(num_digits), 12)
+            for k in (12, 11, 10, 9):
+                if k <= n and sender_digits.endswith(num_digits[-k:]):
+                    return True
+
         return False
 
     inbound_text, sender_wa, phone_number_id = _extract_first_inbound_text_and_sender(payload)

@@ -2144,11 +2144,11 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     """WhatsApp Cloud webhook.
 
     GET: verification (hub.challenge)
-    POST: inbound messages -> route between OPS agent (Stage 9) and Client agent (Stage 8).
+    POST: inbound messages -> routes to OPS agent (owner/staff) or Client agent.
 
     Notes:
       - CSRF exempt (called by Meta)
-      - Routing is deterministic: keyword gate + hard RBAC whitelist.
+      - Actions-only: routing only; agents execute deterministic flows.
     """
 
     def _mask(v: object) -> str:
@@ -2172,15 +2172,6 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
             f"WA VERIFY debug: mode={mode!r} token={_mask(token)} challenge={challenge!r} "
             f"expected_settings={_mask(expected_settings)} expected_env={_mask(expected_env)} expected_used={_mask(expected)}",
             flush=True,
-        )
-        logger.warning(
-            "WA VERIFY debug: mode=%r token=%s challenge=%r expected_settings=%s expected_env=%s expected_used=%s",
-            mode,
-            _mask(token),
-            challenge,
-            _mask(expected_settings),
-            _mask(expected_env),
-            _mask(expected),
         )
 
         if mode == "subscribe" and expected and token == expected and challenge is not None:
@@ -2222,7 +2213,6 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
                 body = ((msg0.get("text") or {}).get("body") or "")
                 return str(body), sender, phone_number_id
 
-            # Interactive replies (buttons / lists)
             if mtype == "interactive":
                 inter = msg0.get("interactive") or {}
                 itype = inter.get("type")
@@ -2238,73 +2228,95 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
             return "", "", ""
 
     def _should_route_to_ops(*, text_in: str) -> bool:
-        """Keyword-based routing requested for Test-number mode."""
         t = (text_in or "").strip()
         if not t:
             return False
-        # NOTE: 'בעל' is generic and can create false positives. Keep as requested.
         keywords = ["בעלים", "בעל", "מנהל"]
         return any(k in t for k in keywords)
+
+    def _digits(s: str) -> str:
+        return "".join(ch for ch in (s or "") if ch.isdigit())
 
     def _is_ops_sender(*, business: Business, sender_wa: str) -> bool:
         """Hard RBAC: only whitelisted staff/owner numbers for this business.
 
-        We intentionally do *not* rely solely on enum values, because DB role values may differ
-        by casing or legacy labels (e.g. 'Owner' vs 'owner'). We treat 'owner'/'staff' in a
-        case-insensitive manner.
+        IMPORTANT: Be tolerant to legacy role encodings ("Owner", "owner", enums, ints).
         """
         if not business or not sender_wa:
             return False
 
-        sender_digits = "".join(ch for ch in str(sender_wa) if ch.isdigit())
+        sender_digits = _digits(sender_wa)
         if not sender_digits:
             return False
 
-        # Pull candidate memberships with a non-empty WhatsApp number.
-        members = (
+        # Allowed role values from enum (if present)
+        enum_owner = getattr(BusinessMembership.Role, "OWNER", None)
+        enum_staff = getattr(BusinessMembership.Role, "STAFF", None)
+        enum_allowed = {v for v in (enum_owner, enum_staff) if v is not None}
+
+        qs = (
             BusinessMembership.objects.filter(business=business)
             .exclude(whatsapp_number__isnull=True)
             .exclude(whatsapp_number__exact="")
-            .values_list("role", "whatsapp_number")
         )
 
-        for role_val, num in members:
-            role_s = str(role_val or "").strip().lower()
-            if role_s not in {"owner", "staff"} and ("owner" not in role_s and "staff" not in role_s):
-                continue
+        # Debug: count memberships once (won't crash the webhook)
+        try:
+            print(f"[WA RBAC] business_id={business.id} memberships_with_numbers={qs.count()}", flush=True)
+        except Exception:
+            pass
 
-            num_digits = "".join(ch for ch in str(num) if ch.isdigit())
+        for role_val, num in qs.values_list("role", "whatsapp_number"):
+            num_digits = _digits(str(num))
             if not num_digits:
                 continue
 
-            # Exact match (digits-only), or suffix match on the last N digits (N=9..12).
+            # Role check (tolerant)
+            role_ok = False
+            if enum_allowed and role_val in enum_allowed:
+                role_ok = True
+            else:
+                rs = str(role_val).strip().lower()
+                # common encodings
+                if rs in {"owner", "staff"} or "owner" in rs or "staff" in rs:
+                    role_ok = True
+                # very old choices: sometimes 1/2 etc
+                if rs in {"1", "2"}:
+                    # can't know which is which; accept only if explicitly requested, but safer to NOT accept.
+                    # keep False.
+                    role_ok = role_ok or False
+
+            # Debug each candidate (optional)
+            try:
+                print(f"[WA RBAC] sender_digits={sender_digits} candidate_digits={num_digits} role={role_val!r} role_ok={role_ok}", flush=True)
+            except Exception:
+                pass
+
+            if not role_ok:
+                continue
+
+            # Compare by full digits, or last 9 digits (Israel local) to tolerate missing prefixes
             if sender_digits == num_digits:
                 return True
-
-            n = min(len(sender_digits), len(num_digits), 12)
-            for k in (12, 11, 10, 9):
-                if k <= n and sender_digits.endswith(num_digits[-k:]):
+            if len(sender_digits) >= 9 and len(num_digits) >= 9:
+                if sender_digits[-9:] == num_digits[-9:]:
                     return True
+            # Also allow suffix match when one is longer (country code differences)
+            if sender_digits.endswith(num_digits) or num_digits.endswith(sender_digits):
+                return True
 
         return False
 
     inbound_text, sender_wa, phone_number_id = _extract_first_inbound_text_and_sender(payload)
 
-    # Resolve business by ops phone_number_id when possible (Test number can share this id).
-    business: Business | None = None
-    try:
-        if phone_number_id:
-            business = (
-                Business.objects.filter(ops_whatsapp_phone_number_id=str(phone_number_id))
-                .order_by("id")
-                .first()
-            )
-        if business is None:
-            business = Business.objects.order_by("id").first()
-    except Exception:
-        business = None
+    # Resolve business by ops phone_number_id when possible.
+    business = None
+    if phone_number_id:
+        business = Business.objects.filter(ops_whatsapp_phone_number_id=phone_number_id).order_by("id").first()
+    if business is None:
+        business = Business.objects.order_by("id").first()
 
-    # Debug routing — safe prints (never crash).
+    # Router debug (never break webhook)
     try:
         kw = _should_route_to_ops(text_in=inbound_text)
         is_ops = _is_ops_sender(business=business, sender_wa=sender_wa) if business else False
@@ -2313,11 +2325,12 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
             f"business_id={getattr(business, 'id', None)} kw={kw} is_ops_sender={is_ops}",
             flush=True,
         )
-    except Exception as e:
-        print(f"[WA ROUTER] debug_failed err={e}", flush=True)
+    except Exception:
+        kw = False
+        is_ops = False
 
     try:
-        if business and _should_route_to_ops(text_in=inbound_text) and _is_ops_sender(business=business, sender_wa=sender_wa):
+        if business and kw and is_ops:
             handle_ops(payload)
         else:
             handle_client(payload)
@@ -2327,4 +2340,5 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"ok": False, "error": "processing_failed"}, status=500)
 
     return JsonResponse({"ok": True})
+
 

@@ -2240,6 +2240,10 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     def _is_ops_sender(*, business: Business, sender_wa: str) -> bool:
         """Hard RBAC: only whitelisted staff/owner numbers for this business.
 
+        Diagnostics:
+          - Prints how many memberships with a whatsapp_number were found for this business.
+          - Prints a few sample rows (id, role, whatsapp_number) to ensure we are querying the same DB you see in Admin.
+
         IMPORTANT: Be tolerant to legacy role encodings ("Owner", "owner", enums, ints).
         """
         if not business or not sender_wa:
@@ -2249,59 +2253,46 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         if not sender_digits:
             return False
 
-        # Allowed role values from enum (if present)
+        try:
+            qs_all = BusinessMembership.objects.filter(business_id=business.id)
+            total_for_business = qs_all.count()
+            with_numbers = qs_all.exclude(whatsapp_number__isnull=True).exclude(whatsapp_number__exact="")
+            with_numbers_count = with_numbers.count()
+            print(
+                f"[WA RBAC] business_id={business.id} memberships_total={total_for_business} memberships_with_numbers={with_numbers_count}",
+                flush=True,
+            )
+            # Print up to 5 rows to see what the webhook process actually reads from DB.
+            for mid, role, wnum in with_numbers.values_list("id", "role", "whatsapp_number")[:5]:
+                print(f"[WA RBAC] row id={mid} role={role!r} whatsapp_number={wnum!r}", flush=True)
+        except Exception as e:
+            print(f"[WA RBAC] debug_failed err={type(e).__name__}:{e}", flush=True)
+            # continue RBAC evaluation best-effort
+
         enum_owner = getattr(BusinessMembership.Role, "OWNER", None)
         enum_staff = getattr(BusinessMembership.Role, "STAFF", None)
-        enum_allowed = {v for v in (enum_owner, enum_staff) if v is not None}
 
-        qs = (
-            BusinessMembership.objects.filter(business=business)
-            .exclude(whatsapp_number__isnull=True)
-            .exclude(whatsapp_number__exact="")
-        )
+        def _role_ok(role_val: object) -> bool:
+            if role_val is None:
+                return False
+            s = str(role_val).strip()
+            if not s:
+                return False
+            s_low = s.lower()
+            return s_low in {"owner", "staff"} or role_val in {enum_owner, enum_staff}
 
-        # Debug: count memberships once (won't crash the webhook)
-        try:
-            print(f"[WA RBAC] business_id={business.id} memberships_with_numbers={qs.count()}", flush=True)
-        except Exception:
-            pass
+        # Don't filter in SQL by role to avoid enum/legacy mismatches; filter in Python.
+        qs = BusinessMembership.objects.filter(business_id=business.id).exclude(whatsapp_number__isnull=True).exclude(whatsapp_number__exact="")
 
         for role_val, num in qs.values_list("role", "whatsapp_number"):
-            num_digits = _digits(str(num))
+            if not _role_ok(role_val):
+                continue
+            num_digits = _digits(num)
             if not num_digits:
                 continue
-
-            # Role check (tolerant)
-            role_ok = False
-            if enum_allowed and role_val in enum_allowed:
-                role_ok = True
-            else:
-                rs = str(role_val).strip().lower()
-                # common encodings
-                if rs in {"owner", "staff"} or "owner" in rs or "staff" in rs:
-                    role_ok = True
-                # very old choices: sometimes 1/2 etc
-                if rs in {"1", "2"}:
-                    # can't know which is which; accept only if explicitly requested, but safer to NOT accept.
-                    # keep False.
-                    role_ok = role_ok or False
-
-            # Debug each candidate (optional)
-            try:
-                print(f"[WA RBAC] sender_digits={sender_digits} candidate_digits={num_digits} role={role_val!r} role_ok={role_ok}", flush=True)
-            except Exception:
-                pass
-
-            if not role_ok:
-                continue
-
-            # Compare by full digits, or last 9 digits (Israel local) to tolerate missing prefixes
             if sender_digits == num_digits:
                 return True
-            if len(sender_digits) >= 9 and len(num_digits) >= 9:
-                if sender_digits[-9:] == num_digits[-9:]:
-                    return True
-            # Also allow suffix match when one is longer (country code differences)
+            # suffix match for tolerating country code / formatting differences
             if sender_digits.endswith(num_digits) or num_digits.endswith(sender_digits):
                 return True
 

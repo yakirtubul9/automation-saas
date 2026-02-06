@@ -2213,12 +2213,6 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
             phone_number_id = str(meta.get("phone_number_id") or "")
 
             msgs = value.get("messages") or []
-            print(
-                f"[WA ROUTER] text={inbound_text!r} sender={sender_wa} phone_number_id={phone_number_id} business_id={getattr(business, 'id', None)}",
-                flush=True)
-            print(
-                f"[WA ROUTER] kw={_should_route_to_ops(text_in=inbound_text)} is_ops_sender={_is_ops_sender(business=business, sender_wa=sender_wa)}",
-                flush=True)
             if not msgs:
                 return "", "", phone_number_id
 
@@ -2261,8 +2255,8 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         ).exclude(whatsapp_number__isnull=True).exclude(whatsapp_number__exact="")
 
         for num in qs.values_list("whatsapp_number", flat=True):
-            print(f"[WA RBAC] sender_digits={sender_digits} candidate={num_digits}", flush=True)
             num_digits = "".join(ch for ch in str(num) if ch.isdigit())
+            print(f"[WA RBAC] sender_digits={sender_digits} candidate_digits={num_digits}", flush=True)
             if not num_digits:
                 continue
             # Match full or last 9-12 digits (handles country code formats)
@@ -2282,6 +2276,12 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     inbound_text, sender_wa, phone_number_id = _extract_first_inbound_text_and_sender(payload)
 
     # Resolve business by ops phone_number_id when possible (Test number can share this id).
+    print(
+        f"[WA ROUTER] text={inbound_text!r} sender={sender_wa} phone_number_id={phone_number_id} business_id={getattr(business, 'id', None)}",
+        flush=True)
+    print(
+        f"[WA ROUTER] kw={_should_route_to_ops(text_in=inbound_text)} is_ops_sender={_is_ops_sender(business=business, sender_wa=sender_wa)}",
+        flush=True)
     business = None
     if phone_number_id:
         business = Business.objects.filter(ops_whatsapp_phone_number_id=phone_number_id).order_by("id").first()

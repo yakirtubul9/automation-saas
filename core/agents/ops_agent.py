@@ -117,23 +117,17 @@ def handle_whatsapp_webhook_payload(payload: dict[str, Any]) -> OutgoingMessage:
         return _send(
             sender_wa,
             f"חדר {room.name} יסגר {start_dt:%Y-%m-%d %H:%M}-{end_dt:%H:%M}."
-            + (f"
-סיבה: {reason}" if reason else "")
-            + "
-לאשר? (כן/לא)"
+            + (f"\\nסיבה: {reason}" if reason else "")
+            + "\\nלאשר? (כן/לא)"
         )
 
     logger.info("[OPS_AGENT] cid=%s section=Fallback event=Menu sender=%s text=%r", cid, sender_wa, text_in)
     return _send(
         sender_wa,
-        "פקודות לדוגמה:
-"
-        "• סגור חדר 2 מחר 10:00-12:00 סיבה: תחזוקה
-"
-        "• סגור חדר 1 היום 14:00-15:00
-"
-        "
-לאישור פעולה ממתינה: ענה כן/לא (אפשר גם 'בעלים: כן')."
+        "פקודות לדוגמה:\\n"
+        "• סגור חדר 2 מחר 10:00-12:00 סיבה: תחזוקה\\n"
+        "• סגור חדר 1 היום 14:00-15:00\\n"
+        "\\nלאישור פעולה ממתינה: ענה כן/לא (אפשר גם 'בעלים: כן')."
     )
 
 # =========================

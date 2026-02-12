@@ -2217,6 +2217,34 @@ def _strip_mode_prefix(text: str) -> tuple[str, Optional[str]]:
     return t[m.end():].strip(), mode
 
 
+
+# Mode commands (test convenience)
+_MODE_COMMANDS_OPS = {"בעלים", "בעל", "מנהל", "מזכירות", "ops", "owner", "staff"}
+_MODE_COMMANDS_CLIENT = {"לקוח", "מטופל", "client"}
+
+def _detect_mode_command(text: str) -> Optional[str]:
+    """
+    Detects a standalone mode-switch command.
+
+    Examples:
+      'בעלים'  -> 'ops'
+      'לקוח'   -> 'client'
+
+    Returns: 'ops' | 'client' | None
+    """
+    t = str(text or "").strip()
+    if not t:
+        return None
+    # Normalize punctuation/spaces; keep hebrew/latin
+    t_norm = re.sub(r"[^\w\u0590-\u05FF]+", " ", t).strip().lower()
+    if not t_norm:
+        return None
+    if t_norm in _MODE_COMMANDS_OPS:
+        return "ops"
+    if t_norm in _MODE_COMMANDS_CLIENT:
+        return "client"
+    return None
+
 def _router_get_mode(sender_digits: str) -> Optional[str]:
     if not sender_digits:
         return None
@@ -2459,6 +2487,32 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
     sender_digits = _digits(sender_wa)
     inbound_text, requested_mode = _strip_mode_prefix(inbound_text_raw)
+
+    # Standalone mode switch command (test convenience):
+    # 'בעלים' => route all next messages to OPS until 'לקוח'/'מטופל'
+    mode_cmd = _detect_mode_command(inbound_text)
+    if mode_cmd:
+        requested_mode = mode_cmd
+        _router_set_mode(sender_digits, requested_mode)
+        try:
+            from core.notifications import get_provider
+            if requested_mode == "ops":
+                get_provider().send(
+                    to=sender_wa,
+                    body="מצב בעלים הופעל. מעכשיו ההודעות מנותבות לסוכן התפעולי. כדי לחזור כתוב: לקוח",
+                    template_name="",
+                )
+            else:
+                get_provider().send(
+                    to=sender_wa,
+                    body="מצב לקוח הופעל. מעכשיו ההודעות מנותבות לסוכן המטופלים. כדי לחזור כתוב: בעלים",
+                    template_name="",
+                )
+        except Exception:
+            pass
+        # Short-circuit: this message is only a mode switch.
+        return JsonResponse({"ok": True})
+
     if requested_mode:
         # store for next messages (test convenience)
         _router_set_mode(sender_digits, requested_mode)
@@ -2480,8 +2534,9 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     # Hard RBAC gate: OPS only if sender is whitelisted.
     is_ops_sender = _is_ops_sender(business=business, sender_wa=sender_wa) if business else False
     if mode == "ops" and not is_ops_sender:
-        # downgrade to client when not authorized (even in tests).
+        # downgrade to client when not authorized.
         mode = "client"
+        _router_set_mode(sender_digits, "client")
 
     # Router debug (never break webhook)
     try:

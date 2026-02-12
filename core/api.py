@@ -2359,9 +2359,7 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
     corr_id = uuid.uuid4().hex[:8]
 
-    # Import locally to keep module import graph simple.
-    from core.agents.client_agent import handle_whatsapp_webhook_payload as handle_client
-    from core.agents.ops_agent import handle_whatsapp_webhook_payload as handle_ops
+    # Agents are imported lazily inside the routing try/except to avoid webhook-wide 500s
 
     def _extract_first_inbound_text_and_sender(p: dict) -> tuple[str, str, str]:
         """Return (text, sender_wa, phone_number_id). Best-effort; empty strings if missing."""
@@ -2558,12 +2556,23 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
     try:
         if business and mode == "ops":
+            from core.agents.ops_agent import handle_whatsapp_webhook_payload as handle_ops
             handle_ops(payload)
         else:
+            from core.agents.client_agent import handle_whatsapp_webhook_payload as handle_client
             handle_client(payload)
     except Exception as e:
-        print(f"[WA WEBHOOK ERROR] {e}", flush=True)
-        logger.exception("WA webhook processing failed")
-        return JsonResponse({"ok": False, "error": "processing_failed"}, status=500)
+        # IMPORTANT: never return 500 to Meta (it will retry aggressively).
+        try:
+            print(f"[WA WEBHOOK ERROR][{corr_id}] err={type(e).__name__}: {e}", flush=True)
+        except Exception:
+            pass
+        logger.exception("WA webhook processing failed corr_id=%s", corr_id)
+        try:
+            if sender_wa:
+                get_provider().send(to=sender_wa, body="משהו השתבש. נסה שוב בעוד רגע.", template_name="")
+        except Exception:
+            pass
+        return JsonResponse({"ok": True})
 
     return JsonResponse({"ok": True})

@@ -2490,28 +2490,36 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
     # Standalone mode switch command (test convenience):
     # 'בעלים' => route all next messages to OPS until 'לקוח'/'מטופל'
-    mode_cmd = _detect_mode_command(inbound_text)
-    if mode_cmd:
-        requested_mode = mode_cmd
-        _router_set_mode(sender_digits, requested_mode)
+    try:
+        mode_cmd = _detect_mode_command(inbound_text)
+        if mode_cmd:
+            requested_mode = mode_cmd
+            _router_set_mode(sender_digits, requested_mode)
+            try:
+                from core.notifications import get_provider
+                if requested_mode == "ops":
+                    get_provider().send(
+                        to=sender_wa,
+                        body="מצב בעלים הופעל. מעכשיו ההודעות מנותבות לסוכן התפעולי. כדי לחזור כתוב: לקוח",
+                        template_name="",
+                    )
+                else:
+                    get_provider().send(
+                        to=sender_wa,
+                        body="מצב לקוח הופעל. מעכשיו ההודעות מנותבות לסוכן המטופלים. כדי לחזור כתוב: בעלים",
+                        template_name="",
+                    )
+            except Exception:
+                pass
+            # Short-circuit: this message is only a mode switch.
+            return JsonResponse({"ok": True})
+    except Exception as e:
+        # Never let router-mode helpers crash the webhook.
         try:
-            from core.notifications import get_provider
-            if requested_mode == "ops":
-                get_provider().send(
-                    to=sender_wa,
-                    body="מצב בעלים הופעל. מעכשיו ההודעות מנותבות לסוכן התפעולי. כדי לחזור כתוב: לקוח",
-                    template_name="",
-                )
-            else:
-                get_provider().send(
-                    to=sender_wa,
-                    body="מצב לקוח הופעל. מעכשיו ההודעות מנותבות לסוכן המטופלים. כדי לחזור כתוב: בעלים",
-                    template_name="",
-                )
+            print(f"[WA ROUTER][{corr_id}] mode_cmd_error={type(e).__name__} err={e}", flush=True)
         except Exception:
             pass
-        # Short-circuit: this message is only a mode switch.
-        return JsonResponse({"ok": True})
+        logger.exception("WA router mode_cmd failed")
 
     if requested_mode:
         # store for next messages (test convenience)

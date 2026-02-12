@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import logging
+import threading
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time as dtime, timedelta
 from typing import Any, Optional
@@ -2184,6 +2187,91 @@ def change_proposal_resend_view(request: HttpRequest, proposal_id: int) -> JsonR
     )
 
 
+
+
+
+# ============================
+# WhatsApp Router (test-mode friendly)
+# ============================
+
+_ROUTER_MODE_TTL_SECONDS = int(os.getenv("WA_ROUTER_MODE_TTL_SECONDS", "1800") or 1800)
+# In-memory routing mode per sender (ONLY for test convenience; multi-worker deployments won't share this state).
+# {sender_digits: (mode, expires_at_utc_ts)} where mode in {"ops","client"}
+_ROUTER_MODE: dict[str, tuple[str, float]] = {}
+_ROUTER_LOCK = threading.Lock()
+
+_PREFIX_RE = re.compile(r"^\s*(בעלים|מטופל)\s*[:\-]\s*", re.UNICODE)
+
+
+def _digits(s: str) -> str:
+    return "".join(ch for ch in (s or "") if ch.isdigit())
+
+
+def _strip_mode_prefix(text: str) -> tuple[str, Optional[str]]:
+    t = str(text or "").strip()
+    m = _PREFIX_RE.match(t)
+    if not m:
+        return t, None
+    mode_he = m.group(1)
+    mode = "ops" if mode_he == "בעלים" else "client"
+    return t[m.end():].strip(), mode
+
+
+def _router_get_mode(sender_digits: str) -> Optional[str]:
+    if not sender_digits:
+        return None
+    now = timezone.now().timestamp()
+    with _ROUTER_LOCK:
+        cur = _ROUTER_MODE.get(sender_digits)
+        if not cur:
+            return None
+        mode, exp = cur
+        if exp < now:
+            _ROUTER_MODE.pop(sender_digits, None)
+            return None
+        return mode
+
+
+def _router_set_mode(sender_digits: str, mode: str) -> None:
+    if not sender_digits or mode not in {"ops", "client"}:
+        return
+    exp = timezone.now().timestamp() + float(_ROUTER_MODE_TTL_SECONDS)
+    with _ROUTER_LOCK:
+        _ROUTER_MODE[sender_digits] = (mode, exp)
+
+
+def _mutate_first_message_text(payload: dict, new_text: str) -> None:
+    """Best-effort: overwrite the first inbound message text/title so agents see the stripped text."""
+    try:
+        entry0 = (payload.get("entry") or [])[0] or {}
+        change0 = (entry0.get("changes") or [])[0] or {}
+        value = change0.get("value") or {}
+        msgs = value.get("messages") or []
+        if not msgs:
+            return
+        msg0 = msgs[0] or {}
+        mtype = msg0.get("type")
+        if mtype == "text":
+            msg0.setdefault("text", {})
+            msg0["text"]["body"] = new_text
+            return
+        if mtype == "interactive":
+            inter = msg0.get("interactive") or {}
+            itype = inter.get("type")
+            if itype == "button_reply":
+                inter.setdefault("button_reply", {})
+                inter["button_reply"]["title"] = new_text
+                msg0["interactive"] = inter
+                return
+            if itype == "list_reply":
+                inter.setdefault("list_reply", {})
+                inter["list_reply"]["title"] = new_text
+                msg0["interactive"] = inter
+                return
+    except Exception:
+        return
+
+
 @csrf_exempt
 def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     """WhatsApp Cloud webhook.
@@ -2241,6 +2329,8 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
         print(f"[WA DB] failed: {e}", flush=True)
 
 
+    corr_id = uuid.uuid4().hex[:8]
+
     # Import locally to keep module import graph simple.
     from core.agents.client_agent import handle_whatsapp_webhook_payload as handle_client
     from core.agents.ops_agent import handle_whatsapp_webhook_payload as handle_ops
@@ -2287,9 +2377,6 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
             return False
         keywords = ["בעלים", "בעל", "מנהל"]
         return any(k in t for k in keywords)
-
-    def _digits(s: str) -> str:
-        return "".join(ch for ch in (s or "") if ch.isdigit())
 
     def _is_ops_sender(*, business: Business, sender_wa: str) -> bool:
         """Hard RBAC: only whitelisted staff/owner numbers for this business.
@@ -2368,7 +2455,15 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
         return False
 
-    inbound_text, sender_wa, phone_number_id = _extract_first_inbound_text_and_sender(payload)
+    inbound_text_raw, sender_wa, phone_number_id = _extract_first_inbound_text_and_sender(payload)
+
+    sender_digits = _digits(sender_wa)
+    inbound_text, requested_mode = _strip_mode_prefix(inbound_text_raw)
+    if requested_mode:
+        # store for next messages (test convenience)
+        _router_set_mode(sender_digits, requested_mode)
+        # ensure agents see the stripped text (fixes "בעלים: כן" -> "כן")
+        _mutate_first_message_text(payload, inbound_text)
 
     # Resolve business by ops phone_number_id when possible.
     business = None
@@ -2377,21 +2472,29 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     if business is None:
         business = Business.objects.order_by("id").first()
 
+    # Decide mode: (1) stored mode, (2) explicit prefix in this message, (3) keyword heuristic.
+    stored_mode = _router_get_mode(sender_digits)
+    kw_mode = "ops" if _should_route_to_ops(text_in=inbound_text) else None
+    mode = stored_mode or requested_mode or kw_mode or "client"
+
+    # Hard RBAC gate: OPS only if sender is whitelisted.
+    is_ops_sender = _is_ops_sender(business=business, sender_wa=sender_wa) if business else False
+    if mode == "ops" and not is_ops_sender:
+        # downgrade to client when not authorized (even in tests).
+        mode = "client"
+
     # Router debug (never break webhook)
     try:
-        kw = _should_route_to_ops(text_in=inbound_text)
-        is_ops = _is_ops_sender(business=business, sender_wa=sender_wa) if business else False
         print(
-            f"[WA ROUTER] text={inbound_text!r} sender={sender_wa} phone_number_id={phone_number_id} "
-            f"business_id={getattr(business, 'id', None)} kw={kw} is_ops_sender={is_ops}",
+            f"[WA ROUTER][{corr_id}] raw_text={inbound_text_raw!r} text={inbound_text!r} sender={sender_wa} sender_digits={sender_digits} "
+            f"phone_number_id={phone_number_id} business_id={getattr(business, 'id', None)} mode={mode} stored_mode={stored_mode} requested_mode={requested_mode} is_ops_sender={is_ops_sender}",
             flush=True,
         )
     except Exception:
-        kw = False
-        is_ops = False
+        pass
 
     try:
-        if business and kw and is_ops:
+        if business and mode == "ops":
             handle_ops(payload)
         else:
             handle_client(payload)

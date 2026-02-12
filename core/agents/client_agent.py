@@ -39,6 +39,31 @@ def _norm_yn(text: str) -> str:
 YES_WORDS = {"כן", "מאשר", "מאשרת", "ok", "okay", "y", "yes", "1"}
 NO_WORDS = {"לא", "דוחה", "reject", "no", "0", "2"}
 
+_PREFIX_RE = re.compile(r"^\s*(בעלים|מטופל)\s*[:\-]\s*", re.UNICODE)
+
+def strip_mode_prefix(text: str) -> tuple[str, Optional[str]]:
+    t = (text or "").strip()
+    m = _PREFIX_RE.match(t)
+    if not m:
+        return t, None
+    mode = m.group(1)
+    return t[m.end():].strip(), mode
+
+
+def _new_cid() -> str:
+    import uuid
+    return uuid.uuid4().hex[:8]
+
+
+def _mask(v: object) -> str:
+    s = str(v or "")
+    if not s:
+        return ""
+    if len(s) <= 6:
+        return s[:1] + "***" + s[-1:]
+    return s[:3] + "***" + s[-3:]
+
+
 
 def _is_sensitive_medical(text: str) -> bool:
     t = (text or "").lower()
@@ -214,9 +239,11 @@ def handle_whatsapp_webhook_payload(payload: Dict[str, Any]) -> None:
 
         client = _get_or_create_client(business=business, wa_from_number=from_number, display_name=display_name)
 
-        text = _extract_text(msg)
+        cid = _new_cid()
+        raw_text = _extract_text(msg)
+        text, mode_prefix = strip_mode_prefix(raw_text)
         print(
-            f"[CLIENT_AGENT] inbound wa_id={wa_message_id} from={from_number} to={to_display_number} type={msg.get('type')} text={text!r}",
+            f"[CLIENT_AGENT][{cid}] inbound wa_id={wa_message_id} from={_mask(from_number)} to={to_display_number} type={msg.get('type')} raw_text={raw_text!r} text={text!r} mode_prefix={mode_prefix!r}",
             flush=True,
         )
         WhatsAppMessage.objects.create(
@@ -228,8 +255,8 @@ def handle_whatsapp_webhook_payload(payload: Dict[str, Any]) -> None:
             wa_message_id=wa_message_id,
             from_number=from_number,
             to_number=normalize_phone(to_display_number, default_country_code=cc),
-            body=text,
-            raw_payload={"message": msg, "metadata": metadata},
+            body=raw_text,
+            raw_payload={"message": msg, "metadata": metadata, "cid": cid, "normalized_text": text, "mode_prefix": mode_prefix},
         )
 
         if _is_sensitive_medical(text):
@@ -243,25 +270,37 @@ def handle_whatsapp_webhook_payload(payload: Dict[str, Any]) -> None:
             continue
 
         session = _get_or_create_session(business=business, provider=provider, wa_from_number=from_number)
-        _process_text(business=business, provider=provider, client=client, session=session, text=text)
+        _process_text(business=business, provider=provider, client=client, session=session, text=text, cid=cid)
 
 
-def _process_text(*, business: Business, provider: Provider, client: Client, session: ConversationSession, text: str) -> None:
+def _process_text(*, business: Business, provider: Provider, client: Client, session: ConversationSession, text: str, cid: str) -> None:
     state: Dict[str, Any] = dict(session.state or {})
+    raw_text = text
     t = (text or "").strip()
+    normalized_text = t
+    intent = _detect_intent(t)
+    yn_token = _norm_yn(t)
+    yn_detected = yn_token in YES_WORDS or yn_token in NO_WORDS
+    yn_value = True if yn_token in YES_WORDS else (False if yn_token in NO_WORDS else None)
     pending = state.get("pending")
-    token = _norm_yn(t)
+    print(
+        f"[CLIENT_AGENT][{cid}] InboundParse raw_text={raw_text!r} normalized_text={normalized_text!r} sender={_mask(client.phone_number)} intent={intent} yesno_detected={yn_detected} yesno_value={yn_value} pending_present={isinstance(pending, dict) and bool(pending.get('action'))}",
+        flush=True,
+    )
 
     if isinstance(pending, dict) and pending.get("action"):
-        if token in YES_WORDS:
-            _execute_pending(business=business, provider=provider, client=client, session=session)
+        if yn_token in YES_WORDS:
+            print(f"[CLIENT_AGENT][{cid}] PendingDecision execute action={pending.get('action')!r}", flush=True)
+            _execute_pending(business=business, provider=provider, client=client, session=session, cid=cid)
             return
-        if token in NO_WORDS:
+        if yn_token in NO_WORDS:
+            print(f"[CLIENT_AGENT][{cid}] PendingDecision cancel action={pending.get('action')!r}", flush=True)
             state.pop("pending", None)
             session.state = state
             session.save(update_fields=["state", "updated_at"])
             _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="בוטל. איך אפשר לעזור עוד?")
             return
+        print(f"[CLIENT_AGENT][{cid}] PendingDecision reason=need_yesno action={pending.get('action')!r} token={yn_token!r}", flush=True)
         _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="כדי להמשיך, נא להשיב 'כן' לאישור או 'לא' לביטול.")
         return
 
@@ -526,10 +565,21 @@ def _offer_reschedule_slots(*, business: Business, provider: Provider, client: C
     _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="\n".join(lines))
 
 
-def _execute_pending(*, business: Business, provider: Provider, client: Client, session: ConversationSession) -> None:
+def _execute_pending(*, business: Business, provider: Provider, client: Client, session: ConversationSession, cid: str) -> None:
     state = dict(session.state or {})
     pending = state.get("pending") or {}
     action = pending.get("action")
+
+    def _mask_id(v: object) -> str:
+        try:
+            s = str(int(v))
+        except Exception:
+            s = str(v or "")
+        if not s:
+            return ""
+        return s if len(s) <= 3 else (s[:1] + "***" + s[-1:])
+
+    print(f"[CLIENT_AGENT][{cid}] Execute begin action={action!r} pending_keys={list(pending.keys())}", flush=True)
 
     # אם אין pending תקין - אין מה לבצע
     if not action:
@@ -541,6 +591,7 @@ def _execute_pending(*, business: Business, provider: Provider, client: Client, 
     try:
         if action == "book":
             slot_id = int(pending.get("slot_id"))
+            print(f"[CLIENT_AGENT][{cid}] Execute book slot_id={_mask_id(slot_id)} service_id={_mask_id(pending.get('service_id'))}", flush=True)
             service_id = pending.get("service_id")
             service = Service.objects.filter(pk=service_id, business=business, is_active=True).first() if service_id else None
 
@@ -550,11 +601,13 @@ def _execute_pending(*, business: Business, provider: Provider, client: Client, 
             session.state = {}
             session.save(update_fields=["state", "updated_at"])
 
+            print(f"[CLIENT_AGENT][{cid}] Execute ok action='book' appointment_id={slot.id}", flush=True)
             _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body=f"✅ נקבע תור ל-{_fmt_dt(business, slot.start_time)}.")
             return
 
         if action == "cancel":
             appt_id = int(pending.get("appointment_id"))
+            print(f"[CLIENT_AGENT][{cid}] Execute cancel appointment_id={_mask_id(appt_id)}", flush=True)
             appt = cancel_appointment_by_client_system(business=business, appointment_id=appt_id)
 
             session.state = {}
@@ -563,17 +616,20 @@ def _execute_pending(*, business: Business, provider: Provider, client: Client, 
             if appt.status == Appointment.Status.CANCELLATION_REQUESTED:
                 _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="🕒 בקשת הביטול נשלחה לצוות לאישור. תקבל/י עדכון בהקדם.")
             else:
+                print(f"[CLIENT_AGENT][{cid}] Execute ok action='cancel' appointment_id={appt.id} status={appt.status}", flush=True)
                 _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="✅ התור בוטל.")
             return
 
         if action == "reschedule":
             old_id = int(pending.get("appointment_id"))
+            print(f"[CLIENT_AGENT][{cid}] Execute reschedule old_appointment_id={_mask_id(old_id)} new_slot_id={_mask_id(pending.get('slot_id'))}", flush=True)
             new_slot_id = int(pending.get("slot_id"))
             reschedule_appointment_system(business=business, old_appointment_id=old_id, new_slot_id=new_slot_id)
 
             session.state = {}
             session.save(update_fields=["state", "updated_at"])
 
+            print(f"[CLIENT_AGENT][{cid}] Execute ok action='reschedule'", flush=True)
             _send_text(business=business, provider=provider, client=client, to_number=client.phone_number, body="✅ עודכן. התור הועבר לחלון החדש.")
             return
 
@@ -589,6 +645,7 @@ def _execute_pending(*, business: Business, provider: Provider, client: Client, 
 
         if code in {"slot_not_available", "provider_conflict", "room_conflict", "room_block"}:
             # פה *לא* מנקים הכל — מציעים חלופות, ומשאירים state חדש ש-_offer_slots יכתוב
+            print(f"[CLIENT_AGENT][{cid}] PendingDecision cancel action={pending.get('action')!r}", flush=True)
             state.pop("pending", None)
             session.state = state
             session.save(update_fields=["state", "updated_at"])

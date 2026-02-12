@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import os
 import logging
 import threading
@@ -2203,6 +2204,13 @@ _ROUTER_LOCK = threading.Lock()
 _PREFIX_RE = re.compile(r"^\s*(בעלים|מטופל)\s*[:\-]\s*", re.UNICODE)
 
 
+
+def _get_corr_id(payload: dict) -> str:
+    v = payload.get("corr_id") or payload.get("correlation_id") or payload.get("cid")
+    if isinstance(v, str) and v.strip():
+        return v.strip()[:32]
+    return secrets.token_hex(4)  # 8 chars
+
 def _digits(s: str) -> str:
     return "".join(ch for ch in (s or "") if ch.isdigit())
 
@@ -2359,7 +2367,9 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
     corr_id = uuid.uuid4().hex[:8]
 
-    # Agents are imported lazily inside the routing try/except to avoid webhook-wide 500s
+    # Import locally to keep module import graph simple.
+    from core.agents.client_agent import handle_whatsapp_webhook_payload as handle_client
+    from core.agents.ops_agent import handle_whatsapp_webhook_payload as handle_ops
 
     def _extract_first_inbound_text_and_sender(p: dict) -> tuple[str, str, str]:
         """Return (text, sender_wa, phone_number_id). Best-effort; empty strings if missing."""
@@ -2488,36 +2498,28 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
     # Standalone mode switch command (test convenience):
     # 'בעלים' => route all next messages to OPS until 'לקוח'/'מטופל'
-    try:
-        mode_cmd = _detect_mode_command(inbound_text)
-        if mode_cmd:
-            requested_mode = mode_cmd
-            _router_set_mode(sender_digits, requested_mode)
-            try:
-                from core.notifications import get_provider
-                if requested_mode == "ops":
-                    get_provider().send(
-                        to=sender_wa,
-                        body="מצב בעלים הופעל. מעכשיו ההודעות מנותבות לסוכן התפעולי. כדי לחזור כתוב: לקוח",
-                        template_name="",
-                    )
-                else:
-                    get_provider().send(
-                        to=sender_wa,
-                        body="מצב לקוח הופעל. מעכשיו ההודעות מנותבות לסוכן המטופלים. כדי לחזור כתוב: בעלים",
-                        template_name="",
-                    )
-            except Exception:
-                pass
-            # Short-circuit: this message is only a mode switch.
-            return JsonResponse({"ok": True})
-    except Exception as e:
-        # Never let router-mode helpers crash the webhook.
+    mode_cmd = _detect_mode_command(inbound_text)
+    if mode_cmd:
+        requested_mode = mode_cmd
+        _router_set_mode(sender_digits, requested_mode)
         try:
-            print(f"[WA ROUTER][{corr_id}] mode_cmd_error={type(e).__name__} err={e}", flush=True)
+            from core.notifications import get_provider
+            if requested_mode == "ops":
+                get_provider().send(
+                    to=sender_wa,
+                    body="מצב בעלים הופעל. מעכשיו ההודעות מנותבות לסוכן התפעולי. כדי לחזור כתוב: לקוח",
+                    template_name="",
+                )
+            else:
+                get_provider().send(
+                    to=sender_wa,
+                    body="מצב לקוח הופעל. מעכשיו ההודעות מנותבות לסוכן המטופלים. כדי לחזור כתוב: בעלים",
+                    template_name="",
+                )
         except Exception:
             pass
-        logger.exception("WA router mode_cmd failed")
+        # Short-circuit: this message is only a mode switch.
+        return JsonResponse({"ok": True})
 
     if requested_mode:
         # store for next messages (test convenience)
@@ -2556,23 +2558,12 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
     try:
         if business and mode == "ops":
-            from core.agents.ops_agent import handle_whatsapp_webhook_payload as handle_ops
             handle_ops(payload)
         else:
-            from core.agents.client_agent import handle_whatsapp_webhook_payload as handle_client
             handle_client(payload)
     except Exception as e:
-        # IMPORTANT: never return 500 to Meta (it will retry aggressively).
-        try:
-            print(f"[WA WEBHOOK ERROR][{corr_id}] err={type(e).__name__}: {e}", flush=True)
-        except Exception:
-            pass
-        logger.exception("WA webhook processing failed corr_id=%s", corr_id)
-        try:
-            if sender_wa:
-                get_provider().send(to=sender_wa, body="משהו השתבש. נסה שוב בעוד רגע.", template_name="")
-        except Exception:
-            pass
-        return JsonResponse({"ok": True})
+        print(f"[WA WEBHOOK ERROR] {e}", flush=True)
+        logger.exception("WA webhook processing failed")
+        return JsonResponse({"ok": False, "error": "processing_failed"}, status=500)
 
     return JsonResponse({"ok": True})

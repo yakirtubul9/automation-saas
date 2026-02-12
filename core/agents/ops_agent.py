@@ -30,6 +30,18 @@ class OutgoingMessage:
     template_name: str = ""
 
 
+
+# =========================
+# Correlation id
+# =========================
+
+def _get_corr_id(payload: dict[str, Any]) -> str:
+    v = payload.get("corr_id") or payload.get("correlation_id") or payload.get("cid")
+    if isinstance(v, str) and v.strip():
+        return v.strip()[:32]
+    return secrets.token_hex(4)  # 8 chars
+
+
 def handle_whatsapp_webhook_payload(payload: dict[str, Any]) -> OutgoingMessage:
     """
     Ops Agent entrypoint.

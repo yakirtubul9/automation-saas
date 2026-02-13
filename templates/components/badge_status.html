@@ -1,0 +1,14 @@
+{# Usage: {% include 'components/badge_status.html' with status=value label=label %} #}
+{% if status == 'confirmed_by_client' %}
+  <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">{{ label|default:"מאושר" }}</span>
+{% elif status == 'cancelled_by_client' or status == 'cancelled_by_staff' %}
+  <span class="inline-flex items-center rounded-full bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-200">{{ label|default:"בוטל" }}</span>
+{% elif status == 'no_show' %}
+  <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200">{{ label|default:"לא הגיע" }}</span>
+{% elif status == 'completed' %}
+  <span class="inline-flex items-center rounded-full bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200">{{ label|default:"הושלם" }}</span>
+{% elif status == 'reserved' %}
+  <span class="inline-flex items-center rounded-full bg-sky-50 px-2 py-1 text-xs font-medium text-sky-800 ring-1 ring-inset ring-sky-200">{{ label|default:"Slot" }}</span>
+{% else %}
+  <span class="inline-flex items-center rounded-full bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200">{{ label|default:status }}</span>
+{% endif %}

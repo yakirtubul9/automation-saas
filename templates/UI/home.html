@@ -1,12 +1,19 @@
 {% extends "UI/base_ui.html" %}
-{% block title %}מערכת תפעול{% endblock %}
+{% block title %}בית{% endblock %}
 {% block ui_content %}
-<h1>מערכת תפעול</h1>
-<p>זה UI בסיסי (Stage 7). התחלה טובה כדי להוציא תפעול מה-Admin.</p>
-<ul>
-  <li><a href="{% url 'ui_appointments' %}">יומן</a></li>
-  <li><a href="{% url 'ui_clients' %}">לקוחות</a></li>
-  <li><a href="{% url 'ui_clinic' %}">הגדרות קליניקה</a></li>
-  <li><a href="{% url 'ui_ops' %}">סטטוסים / תפעול</a></li>
-</ul>
+  {% include "components/page_header.html" with title="ברוך הבא" subtitle="ClinicSaaS • WhatsApp-first" %}
+  <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <a href="{% url 'ui_appointments' %}" class="rounded-2xl border bg-white p-4 shadow-sm hover:bg-slate-50">
+      <div class="text-sm font-semibold">יומן</div>
+      <div class="mt-1 text-xs text-slate-600">תצוגת יום, פילטרים, Slots פנויים</div>
+    </a>
+    <a href="{% url 'ui_clients' %}" class="rounded-2xl border bg-white p-4 shadow-sm hover:bg-slate-50">
+      <div class="text-sm font-semibold">לקוחות</div>
+      <div class="mt-1 text-xs text-slate-600">חיפוש ופרופיל לקוח</div>
+    </a>
+    <a href="{% url 'ui_ops' %}" class="rounded-2xl border bg-white p-4 shadow-sm hover:bg-slate-50">
+      <div class="text-sm font-semibold">תפעול</div>
+      <div class="mt-1 text-xs text-slate-600">WhatsApp, Reminders, Audit</div>
+    </a>
+  </div>
 {% endblock %}

@@ -1,0 +1,10 @@
+{# Usage: {% include 'components/page_header.html' with title='...' subtitle='...' actions_block='blockname' %} #}
+<div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+  <div>
+    <h1 class="text-xl font-semibold tracking-tight">{{ title }}</h1>
+    {% if subtitle %}<p class="mt-1 text-sm text-slate-600">{{ subtitle }}</p>{% endif %}
+  </div>
+  {% if actions %}
+    <div class="flex items-center gap-2">{{ actions }}</div>
+  {% endif %}
+</div>

@@ -1,0 +1,18 @@
+{# Usage: {% include 'components/pagination.html' with page_obj=page_obj %} #}
+{% if page_obj and page_obj.paginator.num_pages > 1 %}
+  <div class="mt-4 flex items-center justify-between gap-3">
+    <div class="text-xs text-slate-500">
+      עמוד {{ page_obj.number }} מתוך {{ page_obj.paginator.num_pages }} • סה״כ {{ page_obj.paginator.count }}
+    </div>
+    <div class="flex items-center gap-2">
+      {% if page_obj.has_previous %}
+        <a class="rounded-lg border bg-white px-3 py-1.5 text-xs hover:bg-slate-50"
+           href="?{% for k,v in request.GET.items %}{% if k != 'page' %}{{ k }}={{ v|urlencode }}&{% endif %}{% endfor %}page={{ page_obj.previous_page_number }}">הקודם</a>
+      {% endif %}
+      {% if page_obj.has_next %}
+        <a class="rounded-lg border bg-white px-3 py-1.5 text-xs hover:bg-slate-50"
+           href="?{% for k,v in request.GET.items %}{% if k != 'page' %}{{ k }}={{ v|urlencode }}&{% endif %}{% endfor %}page={{ page_obj.next_page_number }}">הבא</a>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}

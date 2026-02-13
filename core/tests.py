@@ -1403,3 +1403,70 @@ class OpsAgentTests(TestCase):
         handle_whatsapp_webhook_payload(p2)
 
         self.assertTrue(RoomBlock.objects.filter(business=self.business, room=self.room1, is_active=True).exists())
+
+
+class UiRbacAndPaginationTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.staff_user = User.objects.create_user(username="ui_staff", password="pass")
+        self.provider_user = User.objects.create_user(username="ui_provider", password="pass")
+
+        self.business = Business.objects.create(owner=self.staff_user, name="UI Clinic")
+        BusinessMembership.objects.create(business=self.business, user=self.staff_user, role=BusinessMembership.Role.STAFF)
+        BusinessMembership.objects.create(
+            business=self.business,
+            user=self.provider_user,
+            role=BusinessMembership.Role.PROVIDER,
+            whatsapp_number="+972500000099",
+        )
+
+        self.spec = Specialty.objects.create(business=self.business, name="Derm")
+        self.room = Room.objects.create(business=self.business, name="Room 1")
+        self.room.specialties.add(self.spec)
+        self.provider = Provider.objects.create(
+            business=self.business,
+            display_name="Dr UI",
+            specialty=self.spec,
+            whatsapp_number="+972500000099",
+        )
+        self.service = Service.objects.create(business=self.business, name="Consult", duration_minutes=30, specialty=self.spec)
+        self.client = Client.objects.create(business=self.business, full_name="John Patient", phone_number="+972500000077")
+
+        start = (timezone.now() + timedelta(days=1)).replace(minute=0, second=0, microsecond=0)
+        # create many appointments for pagination
+        for i in range(30):
+            Appointment.objects.create(
+                business=self.business,
+                provider=self.provider,
+                room=self.room,
+                client=self.client,
+                service=self.service,
+                start_time=start + timedelta(minutes=30 * i),
+                end_time=start + timedelta(minutes=30 * i + 30),
+                status=Appointment.Status.SCHEDULED,
+            )
+
+    def test_staff_does_not_see_patient_name_in_ui_appointments(self):
+        self.client.login(username="ui_staff", password="pass")
+        day = timezone.localdate(timezone.now() + timedelta(days=1)).isoformat()
+        resp = self.client.get(reverse("ui_appointments") + f"?day={day}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, "John Patient")
+        self.assertContains(resp, "מטופל")
+
+    def test_provider_sees_patient_name_for_own_appointments(self):
+        self.client.login(username="ui_provider", password="pass")
+        day = timezone.localdate(timezone.now() + timedelta(days=1)).isoformat()
+        resp = self.client.get(reverse("ui_appointments") + f"?day={day}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "John Patient")
+
+    def test_ui_appointments_paginates(self):
+        self.client.login(username="ui_staff", password="pass")
+        day = timezone.localdate(timezone.now() + timedelta(days=1)).isoformat()
+        resp1 = self.client.get(reverse("ui_appointments") + f"?day={day}&page=1")
+        resp2 = self.client.get(reverse("ui_appointments") + f"?day={day}&page=2")
+        self.assertEqual(resp1.status_code, 200)
+        self.assertEqual(resp2.status_code, 200)
+        # Should have different first-row times due to pagination
+        self.assertNotEqual(resp1.context["rows"][0]["start"], resp2.context["rows"][0]["start"])

@@ -1,24 +1,59 @@
 {% extends "UI/base_ui.html" %}
 {% block title %}לקוח{% endblock %}
 {% block ui_content %}
-<h1>{{ client.full_name }}</h1>
-<p>טלפון: {{ client.phone }}</p>
+  {% include "components/page_header.html" with title=client.full_name subtitle="פרטי לקוח והיסטוריית תורים" %}
 
-<h2>היסטוריית תורים</h2>
-<table>
-  <thead><tr><th>תאריך</th><th>שירות</th><th>רופא</th><th>חדר</th><th>סטטוס</th></tr></thead>
-  <tbody>
-  {% for a in appts %}
-    <tr>
-      <td>{{ a.start_time }}</td>
-      <td>{% if a.service %}{{ a.service.name }}{% else %}-{% endif %}</td>
-      <td>{{ a.provider }}</td>
-      <td>{{ a.room }}</td>
-      <td>{{ a.get_status_display }}</td>
-    </tr>
-  {% empty %}
-    <tr><td colspan="5">אין היסטוריה.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+  <div class="rounded-2xl border bg-white p-4 shadow-sm">
+    <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+      <div>
+        <div class="text-xs font-medium text-slate-600">טלפון</div>
+        <div class="mt-1 text-sm">{{ client.phone_number }}</div>
+      </div>
+      <div>
+        <div class="text-xs font-medium text-slate-600">אימייל</div>
+        <div class="mt-1 text-sm">{% if client.email %}{{ client.email }}{% else %}-{% endif %}</div>
+      </div>
+      <div>
+        <div class="text-xs font-medium text-slate-600">נוצר</div>
+        <div class="mt-1 text-sm">{{ client.created_at|date:"Y-m-d" }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-4 overflow-hidden rounded-2xl border bg-white shadow-sm">
+    <div class="px-4 py-3 border-b bg-slate-50">
+      <div class="text-sm font-semibold">היסטוריית תורים</div>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y">
+        <thead class="bg-white">
+          <tr class="text-right text-xs font-semibold text-slate-600">
+            <th class="px-4 py-3">תאריך</th>
+            <th class="px-4 py-3">שירות</th>
+            <th class="px-4 py-3">רופא</th>
+            <th class="px-4 py-3">חדר</th>
+            <th class="px-4 py-3">סטטוס</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y">
+          {% for a in appts %}
+            <tr class="text-sm hover:bg-slate-50">
+              <td class="px-4 py-3 whitespace-nowrap">{{ a.start_time|date:"Y-m-d H:i" }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{% if a.service %}{{ a.service.name }}{% else %}-{% endif %}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ a.provider }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ a.room }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">
+                {% include "components/badge_status.html" with status=a.status label=a.get_status_display %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td class="px-4 py-10 text-center text-sm text-slate-500" colspan="5">אין היסטוריה.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% include "components/pagination.html" with page_obj=page_obj %}
 {% endblock %}

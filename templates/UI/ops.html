@@ -1,29 +1,180 @@
 {% extends "UI/base_ui.html" %}
 {% block title %}תפעול{% endblock %}
 {% block ui_content %}
-<h1>תפעול / סטטוסים</h1>
+  {% include "components/page_header.html" with title="תפעול" subtitle="ניטור, תקלות ואבחון מהיר" %}
 
-<h2>Reminders אחרונים</h2>
-<table>
-  <thead><tr><th>ID</th><th>סטטוס</th><th>תור</th></tr></thead>
-  <tbody>
-  {% for r in reminders %}
-    <tr><td>{{ r.id }}</td><td>{{ r.status }}</td><td>{{ r.appointment_id }}</td></tr>
-  {% empty %}
-    <tr><td colspan="3">אין.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+  <div class="rounded-2xl border bg-white p-2 shadow-sm">
+    <div class="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-2">
+      {% with base_url="/app/ops/" %}
+        <a class="rounded-xl px-3 py-2 text-sm {% if tab == 'errors' %}bg-slate-900 text-white{% else %}hover:bg-slate-100{% endif %}"
+           href="{{ base_url }}?tab=errors">שגיאות</a>
+        <a class="rounded-xl px-3 py-2 text-sm {% if tab == 'whatsapp' %}bg-slate-900 text-white{% else %}hover:bg-slate-100{% endif %}"
+           href="{{ base_url }}?tab=whatsapp">WhatsApp</a>
+        <a class="rounded-xl px-3 py-2 text-sm {% if tab == 'reminders' %}bg-slate-900 text-white{% else %}hover:bg-slate-100{% endif %}"
+           href="{{ base_url }}?tab=reminders">Reminders</a>
+        <a class="rounded-xl px-3 py-2 text-sm {% if tab == 'audits' %}bg-slate-900 text-white{% else %}hover:bg-slate-100{% endif %}"
+           href="{{ base_url }}?tab=audits">Audit</a>
+      {% endwith %}
+    </div>
+  </div>
 
-{% if audits %}
-<h2>Audit (אחרון)</h2>
-<table>
-  <thead><tr><th>ID</th><th>action</th><th>created</th></tr></thead>
-  <tbody>
-  {% for a in audits %}
-    <tr><td>{{ a.id }}</td><td>{{ a.action }}</td><td>{{ a.created_at }}</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% endif %}
+  {% if tab == 'errors' %}
+    <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div class="overflow-hidden rounded-2xl border bg-white shadow-sm">
+        <div class="border-b bg-slate-50 px-4 py-3">
+          <div class="text-sm font-semibold">Audit חשוד (action כולל fail)</div>
+          <div class="text-xs text-slate-500">היוריסטיקה — לא מחליף Observability מלאה</div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y">
+            <thead class="bg-white">
+              <tr class="text-right text-xs font-semibold text-slate-600">
+                <th class="px-4 py-3">ID</th>
+                <th class="px-4 py-3">Action</th>
+                <th class="px-4 py-3">נוצר</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              {% for a in error_audits %}
+                <tr class="text-sm hover:bg-slate-50">
+                  <td class="px-4 py-3">{{ a.id }}</td>
+                  <td class="px-4 py-3">{{ a.action }}</td>
+                  <td class="px-4 py-3 whitespace-nowrap">{{ a.created_at|date:"Y-m-d H:i" }}</td>
+                </tr>
+              {% empty %}
+                <tr><td class="px-4 py-10 text-center text-sm text-slate-500" colspan="3">אין.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="overflow-hidden rounded-2xl border bg-white shadow-sm">
+        <div class="border-b bg-slate-50 px-4 py-3">
+          <div class="text-sm font-semibold">WhatsApp Outbound בלי wa_message_id</div>
+          <div class="text-xs text-slate-500">בד״כ סימן לכשל שליחה / mock</div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y">
+            <thead class="bg-white">
+              <tr class="text-right text-xs font-semibold text-slate-600">
+                <th class="px-4 py-3">זמן</th>
+                <th class="px-4 py-3">To</th>
+                <th class="px-4 py-3">Purpose</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y">
+              {% for m in error_wa %}
+                <tr class="text-sm hover:bg-slate-50">
+                  <td class="px-4 py-3 whitespace-nowrap">{{ m.created_at|date:"Y-m-d H:i" }}</td>
+                  <td class="px-4 py-3">{{ m.to_number }}</td>
+                  <td class="px-4 py-3">{{ m.purpose }}</td>
+                </tr>
+              {% empty %}
+                <tr><td class="px-4 py-10 text-center text-sm text-slate-500" colspan="3">אין.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if tab == 'whatsapp' %}
+    <div class="mt-4 overflow-hidden rounded-2xl border bg-white shadow-sm">
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y">
+          <thead class="bg-slate-50">
+            <tr class="text-right text-xs font-semibold text-slate-600">
+              <th class="px-4 py-3">זמן</th>
+              <th class="px-4 py-3">כיוון</th>
+              <th class="px-4 py-3">Purpose</th>
+              <th class="px-4 py-3">From</th>
+              <th class="px-4 py-3">To</th>
+              <th class="px-4 py-3">Body</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for m in whatsapp %}
+              <tr class="text-sm hover:bg-slate-50">
+                <td class="px-4 py-3 whitespace-nowrap">{{ m.created_at|date:"Y-m-d H:i" }}</td>
+                <td class="px-4 py-3">{{ m.direction }}</td>
+                <td class="px-4 py-3">{{ m.purpose }}</td>
+                <td class="px-4 py-3">{{ m.from_number }}</td>
+                <td class="px-4 py-3">{{ m.to_number }}</td>
+                <td class="px-4 py-3 max-w-md truncate" title="{{ m.body }}">{{ m.body|default:"-" }}</td>
+              </tr>
+            {% empty %}
+              <tr><td class="px-4 py-10 text-center text-sm text-slate-500" colspan="6">אין הודעות.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% include "components/pagination.html" with page_obj=page_obj %}
+  {% endif %}
+
+  {% if tab == 'reminders' %}
+    <div class="mt-4 overflow-hidden rounded-2xl border bg-white shadow-sm">
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y">
+          <thead class="bg-slate-50">
+            <tr class="text-right text-xs font-semibold text-slate-600">
+              <th class="px-4 py-3">ID</th>
+              <th class="px-4 py-3">סוג</th>
+              <th class="px-4 py-3">סטטוס</th>
+              <th class="px-4 py-3">תור</th>
+              <th class="px-4 py-3">נשלח</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for r in reminders %}
+              <tr class="text-sm hover:bg-slate-50">
+                <td class="px-4 py-3">{{ r.id }}</td>
+                <td class="px-4 py-3">{{ r.reminder_type }}</td>
+                <td class="px-4 py-3">{{ r.status }}</td>
+                <td class="px-4 py-3">{{ r.appointment_id }}</td>
+                <td class="px-4 py-3 whitespace-nowrap">{% if r.sent_at %}{{ r.sent_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
+              </tr>
+            {% empty %}
+              <tr><td class="px-4 py-10 text-center text-sm text-slate-500" colspan="5">אין.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% include "components/pagination.html" with page_obj=page_obj %}
+  {% endif %}
+
+  {% if tab == 'audits' %}
+    <div class="mt-4 overflow-hidden rounded-2xl border bg-white shadow-sm">
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y">
+          <thead class="bg-slate-50">
+            <tr class="text-right text-xs font-semibold text-slate-600">
+              <th class="px-4 py-3">ID</th>
+              <th class="px-4 py-3">Actor</th>
+              <th class="px-4 py-3">Action</th>
+              <th class="px-4 py-3">Entity</th>
+              <th class="px-4 py-3">נוצר</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for a in audits %}
+              <tr class="text-sm hover:bg-slate-50">
+                <td class="px-4 py-3">{{ a.id }}</td>
+                <td class="px-4 py-3">{% if a.actor %}{{ a.actor.username }}{% else %}-{% endif %}</td>
+                <td class="px-4 py-3">{{ a.action }}</td>
+                <td class="px-4 py-3">{{ a.entity_type }}#{{ a.entity_id }}</td>
+                <td class="px-4 py-3 whitespace-nowrap">{{ a.created_at|date:"Y-m-d H:i" }}</td>
+              </tr>
+            {% empty %}
+              <tr><td class="px-4 py-10 text-center text-sm text-slate-500" colspan="5">אין.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% include "components/pagination.html" with page_obj=page_obj %}
+  {% endif %}
 {% endblock %}

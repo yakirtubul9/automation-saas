@@ -1,25 +1,48 @@
 {% extends "UI/base_ui.html" %}
 {% block title %}לקוחות{% endblock %}
 {% block ui_content %}
-<h1>לקוחות</h1>
+  {% include "components/page_header.html" with title="לקוחות" subtitle="חיפוש וניהול בסיסי" %}
 
-<form method="get" style="margin: 10px 0;">
-  <input name="q" placeholder="חיפוש לפי שם" value="{{ q }}" />
-  <button type="submit">חפש</button>
-</form>
+  <form method="get" class="rounded-2xl border bg-white p-4 shadow-sm">
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div class="w-full sm:max-w-md">
+        <label class="block text-xs font-medium text-slate-600">חיפוש</label>
+        <input name="q" placeholder="חיפוש לפי שם" value="{{ q }}"
+               class="mt-1 w-full rounded-xl border px-3 py-2 text-sm" />
+      </div>
+      <div class="flex items-center gap-2">
+        <a class="rounded-xl border bg-white px-3 py-2 text-sm hover:bg-slate-50" href="{% url 'ui_clients' %}">נקה</a>
+        <button type="submit" class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">חפש</button>
+      </div>
+    </div>
+  </form>
 
-<table>
-  <thead><tr><th>שם</th><th>טלפון</th><th></th></tr></thead>
-  <tbody>
-  {% for c in clients %}
-    <tr>
-      <td>{{ c.full_name }}</td>
-      <td>{{ c.phone }}</td>
-      <td><a href="{% url 'ui_client_detail' c.id %}">פרטים</a></td>
-    </tr>
-  {% empty %}
-    <tr><td colspan="3">אין לקוחות.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+  <div class="mt-4 overflow-hidden rounded-2xl border bg-white shadow-sm">
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y">
+        <thead class="bg-slate-50">
+          <tr class="text-right text-xs font-semibold text-slate-600">
+            <th class="px-4 py-3">שם</th>
+            <th class="px-4 py-3">טלפון</th>
+            <th class="px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y">
+          {% for c in clients %}
+            <tr class="text-sm hover:bg-slate-50">
+              <td class="px-4 py-3 whitespace-nowrap">{{ c.full_name }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ c.phone_number }}</td>
+              <td class="px-4 py-3 whitespace-nowrap text-left">
+                <a class="text-sm font-medium text-slate-900 hover:underline" href="{% url 'ui_client_detail' c.id %}">פרטים</a>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td class="px-4 py-10 text-center text-sm text-slate-500" colspan="3">אין לקוחות.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% include "components/pagination.html" with page_obj=page_obj %}
 {% endblock %}

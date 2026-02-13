@@ -1,29 +1,55 @@
 {% extends "UI/base_ui.html" %}
 {% block title %}קליניקה{% endblock %}
 {% block ui_content %}
-<h1>הגדרות קליניקה (בסיסי)</h1>
+  {% include "components/page_header.html" with title="הגדרות קליניקה" subtitle="קריאה בלבד בשלב זה" %}
 
-<h2>חדרים</h2>
-<table>
-  <thead><tr><th>שם</th><th>תחום</th></tr></thead>
-  <tbody>
-  {% for r in rooms %}
-    <tr><td>{{ r.name }}</td><td>{{ r.specialty }}</td></tr>
-  {% empty %}
-    <tr><td colspan="2">אין חדרים.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+  <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div class="overflow-hidden rounded-2xl border bg-white shadow-sm">
+      <div class="border-b bg-slate-50 px-4 py-3">
+        <div class="text-sm font-semibold">חדרים</div>
+      </div>
+      <ul class="divide-y">
+        {% for r in rooms %}
+          <li class="px-4 py-3 text-sm">
+            <div class="font-medium">{{ r.name }}</div>
+            <div class="text-xs text-slate-500">{% if r.is_active %}פעיל{% else %}לא פעיל{% endif %}</div>
+          </li>
+        {% empty %}
+          <li class="px-4 py-10 text-center text-sm text-slate-500">אין חדרים.</li>
+        {% endfor %}
+      </ul>
+    </div>
 
-<h2>שירותים</h2>
-<table>
-  <thead><tr><th>שם</th><th>תחום</th><th>משך</th></tr></thead>
-  <tbody>
-  {% for s in services %}
-    <tr><td>{{ s.name }}</td><td>{{ s.specialty }}</td><td>{{ s.duration_minutes }}</td></tr>
-  {% empty %}
-    <tr><td colspan="3">אין שירותים.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+    <div class="overflow-hidden rounded-2xl border bg-white shadow-sm">
+      <div class="border-b bg-slate-50 px-4 py-3">
+        <div class="text-sm font-semibold">שירותים</div>
+      </div>
+      <ul class="divide-y">
+        {% for s in services %}
+          <li class="px-4 py-3 text-sm">
+            <div class="font-medium">{{ s.name }}</div>
+            <div class="text-xs text-slate-500">{{ s.duration_minutes }} דק׳</div>
+          </li>
+        {% empty %}
+          <li class="px-4 py-10 text-center text-sm text-slate-500">אין שירותים.</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="overflow-hidden rounded-2xl border bg-white shadow-sm">
+      <div class="border-b bg-slate-50 px-4 py-3">
+        <div class="text-sm font-semibold">רופאים</div>
+      </div>
+      <ul class="divide-y">
+        {% for p in providers %}
+          <li class="px-4 py-3 text-sm">
+            <div class="font-medium">{{ p.display_name }}</div>
+            <div class="text-xs text-slate-500">{% if p.is_active %}פעיל{% else %}לא פעיל{% endif %}</div>
+          </li>
+        {% empty %}
+          <li class="px-4 py-10 text-center text-sm text-slate-500">אין רופאים.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
 {% endblock %}

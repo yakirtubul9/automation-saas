@@ -1,34 +1,102 @@
 {% extends "UI/base_ui.html" %}
 {% block title %}יומן{% endblock %}
 {% block ui_content %}
-<h1>יומן יומי — {{ target_date }}</h1>
+  {% include "components/page_header.html" with title="יומן יומי" subtitle=target_date|date:"Y-m-d" %}
 
-<form method="get" style="margin: 10px 0;">
-  <label>תאריך (YYYY-MM-DD):</label>
-  <input name="day" value="{{ target_date|date:'Y-m-d' }}" />
-  <button type="submit">הצג</button>
-</form>
+  <form method="get" class="rounded-2xl border bg-white p-4 shadow-sm">
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-6">
+      <div class="sm:col-span-2">
+        <label class="block text-xs font-medium text-slate-600">תאריך</label>
+        <input name="day" type="date" value="{{ target_date|date:'Y-m-d' }}"
+               class="mt-1 w-full rounded-xl border px-3 py-2 text-sm focus:outline-none focus:ring" />
+      </div>
 
-<table>
-  <thead>
-    <tr>
-      <th>התחלה</th><th>סיום</th><th>רופא</th><th>חדר</th><th>לקוח</th><th>שירות</th><th>סטטוס</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in rows %}
-      <tr>
-        <td>{{ r.start }}</td>
-        <td>{{ r.end }}</td>
-        <td>{{ r.provider }}</td>
-        <td>{{ r.room }}</td>
-        <td>{{ r.client }}</td>
-        <td>{{ r.service }}</td>
-        <td>{{ r.status }}</td>
-      </tr>
-    {% empty %}
-      <tr><td colspan="7">אין שיבוצים ליום הזה.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+      <div class="sm:col-span-2">
+        <label class="block text-xs font-medium text-slate-600">רופא</label>
+        <select name="provider" class="mt-1 w-full rounded-xl border px-3 py-2 text-sm">
+          <option value="">הכל</option>
+          {% for p in providers %}
+            <option value="{{ p.id }}" {% if filters.provider == p.id|stringformat:"s" %}selected{% endif %}>{{ p.display_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="sm:col-span-1">
+        <label class="block text-xs font-medium text-slate-600">חדר</label>
+        <select name="room" class="mt-1 w-full rounded-xl border px-3 py-2 text-sm">
+          <option value="">הכל</option>
+          {% for r in rooms %}
+            <option value="{{ r.id }}" {% if filters.room == r.id|stringformat:"s" %}selected{% endif %}>{{ r.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="sm:col-span-1">
+        <label class="block text-xs font-medium text-slate-600">סטטוס</label>
+        <select name="status" class="mt-1 w-full rounded-xl border px-3 py-2 text-sm">
+          <option value="">הכל</option>
+          {% for k,label in status_choices %}
+            <option value="{{ k }}" {% if filters.status == k %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="sm:col-span-3 flex items-center gap-3">
+        <label class="mt-2 inline-flex items-center gap-2 text-sm">
+          <input type="checkbox" name="open" value="1" class="rounded border"
+                 {% if filters.open %}checked{% endif %} />
+          רק Slots פנויים (ללא מטופל)
+        </label>
+      </div>
+
+      <div class="sm:col-span-3 flex items-center justify-end gap-2">
+        <a class="rounded-xl border bg-white px-3 py-2 text-sm hover:bg-slate-50"
+           href="{% url 'ui_appointments' %}?day={{ target_date|date:'Y-m-d' }}">נקה פילטרים</a>
+        <button type="submit" class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
+          הצג
+        </button>
+      </div>
+    </div>
+  </form>
+
+  <div class="mt-4 overflow-hidden rounded-2xl border bg-white shadow-sm">
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y">
+        <thead class="bg-slate-50">
+          <tr class="text-right text-xs font-semibold text-slate-600">
+            <th class="px-4 py-3">התחלה</th>
+            <th class="px-4 py-3">סיום</th>
+            <th class="px-4 py-3">רופא</th>
+            <th class="px-4 py-3">חדר</th>
+            <th class="px-4 py-3">מטופל</th>
+            <th class="px-4 py-3">שירות</th>
+            <th class="px-4 py-3">סטטוס</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y">
+          {% for r in rows %}
+            <tr class="text-sm hover:bg-slate-50">
+              <td class="px-4 py-3 whitespace-nowrap">{{ r.start|date:"H:i" }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ r.end|date:"H:i" }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ r.provider }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ r.room }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ r.client }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ r.service }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">
+                {% include "components/badge_status.html" with status=r.status label=r.status_label %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td class="px-4 py-10 text-center text-sm text-slate-500" colspan="7">
+                אין שיבוצים ליום הזה.
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% include "components/pagination.html" with page_obj=page_obj %}
 {% endblock %}

@@ -1,11 +1,7 @@
 {% extends "base.html" %}
-{% block title %}UI{% endblock %}
+{% block title %}ClinicSaaS{% endblock %}
 {% block content %}
-<div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px;">
-  <a href="{% url 'ui_appointments' %}">יומן</a>
-  <a href="{% url 'ui_clients' %}">לקוחות</a>
-  <a href="{% url 'ui_clinic' %}">קליניקה</a>
-  <a href="{% url 'ui_ops' %}">תפעול</a>
-</div>
-{% block ui_content %}{% endblock %}
+  <div class="space-y-4">
+    {% block ui_content %}{% endblock %}
+  </div>
 {% endblock %}

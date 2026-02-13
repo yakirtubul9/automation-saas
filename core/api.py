@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import json
-import re
-import secrets
 import os
+import re
 import logging
-import threading
-import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time as dtime, timedelta
 from typing import Any, Optional
@@ -17,6 +14,7 @@ logger = logging.getLogger(__name__)
 from django.contrib.auth.decorators import login_required
 from django.conf import settings
 from django.db import transaction
+from django.core.cache import cache
 from django.http import HttpRequest, JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
@@ -2188,126 +2186,6 @@ def change_proposal_resend_view(request: HttpRequest, proposal_id: int) -> JsonR
     )
 
 
-
-
-
-# ============================
-# WhatsApp Router (test-mode friendly)
-# ============================
-
-_ROUTER_MODE_TTL_SECONDS = int(os.getenv("WA_ROUTER_MODE_TTL_SECONDS", "1800") or 1800)
-# In-memory routing mode per sender (ONLY for test convenience; multi-worker deployments won't share this state).
-# {sender_digits: (mode, expires_at_utc_ts)} where mode in {"ops","client"}
-_ROUTER_MODE: dict[str, tuple[str, float]] = {}
-_ROUTER_LOCK = threading.Lock()
-
-_PREFIX_RE = re.compile(r"^\s*(בעלים|מטופל)\s*[:\-]\s*", re.UNICODE)
-
-
-
-def _get_corr_id(payload: dict) -> str:
-    v = payload.get("corr_id") or payload.get("correlation_id") or payload.get("cid")
-    if isinstance(v, str) and v.strip():
-        return v.strip()[:32]
-    return secrets.token_hex(4)  # 8 chars
-
-def _digits(s: str) -> str:
-    return "".join(ch for ch in (s or "") if ch.isdigit())
-
-
-def _strip_mode_prefix(text: str) -> tuple[str, Optional[str]]:
-    t = str(text or "").strip()
-    m = _PREFIX_RE.match(t)
-    if not m:
-        return t, None
-    mode_he = m.group(1)
-    mode = "ops" if mode_he == "בעלים" else "client"
-    return t[m.end():].strip(), mode
-
-
-
-# Mode commands (test convenience)
-_MODE_COMMANDS_OPS = {"בעלים", "בעל", "מנהל", "מזכירות", "ops", "owner", "staff"}
-_MODE_COMMANDS_CLIENT = {"לקוח", "מטופל", "client"}
-
-def _detect_mode_command(text: str) -> Optional[str]:
-    """
-    Detects a standalone mode-switch command.
-
-    Examples:
-      'בעלים'  -> 'ops'
-      'לקוח'   -> 'client'
-
-    Returns: 'ops' | 'client' | None
-    """
-    t = str(text or "").strip()
-    if not t:
-        return None
-    # Normalize punctuation/spaces; keep hebrew/latin
-    t_norm = re.sub(r"[^\w\u0590-\u05FF]+", " ", t).strip().lower()
-    if not t_norm:
-        return None
-    if t_norm in _MODE_COMMANDS_OPS:
-        return "ops"
-    if t_norm in _MODE_COMMANDS_CLIENT:
-        return "client"
-    return None
-
-def _router_get_mode(sender_digits: str) -> Optional[str]:
-    if not sender_digits:
-        return None
-    now = timezone.now().timestamp()
-    with _ROUTER_LOCK:
-        cur = _ROUTER_MODE.get(sender_digits)
-        if not cur:
-            return None
-        mode, exp = cur
-        if exp < now:
-            _ROUTER_MODE.pop(sender_digits, None)
-            return None
-        return mode
-
-
-def _router_set_mode(sender_digits: str, mode: str) -> None:
-    if not sender_digits or mode not in {"ops", "client"}:
-        return
-    exp = timezone.now().timestamp() + float(_ROUTER_MODE_TTL_SECONDS)
-    with _ROUTER_LOCK:
-        _ROUTER_MODE[sender_digits] = (mode, exp)
-
-
-def _mutate_first_message_text(payload: dict, new_text: str) -> None:
-    """Best-effort: overwrite the first inbound message text/title so agents see the stripped text."""
-    try:
-        entry0 = (payload.get("entry") or [])[0] or {}
-        change0 = (entry0.get("changes") or [])[0] or {}
-        value = change0.get("value") or {}
-        msgs = value.get("messages") or []
-        if not msgs:
-            return
-        msg0 = msgs[0] or {}
-        mtype = msg0.get("type")
-        if mtype == "text":
-            msg0.setdefault("text", {})
-            msg0["text"]["body"] = new_text
-            return
-        if mtype == "interactive":
-            inter = msg0.get("interactive") or {}
-            itype = inter.get("type")
-            if itype == "button_reply":
-                inter.setdefault("button_reply", {})
-                inter["button_reply"]["title"] = new_text
-                msg0["interactive"] = inter
-                return
-            if itype == "list_reply":
-                inter.setdefault("list_reply", {})
-                inter["list_reply"]["title"] = new_text
-                msg0["interactive"] = inter
-                return
-    except Exception:
-        return
-
-
 @csrf_exempt
 def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     """WhatsApp Cloud webhook.
@@ -2319,6 +2197,37 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
       - CSRF exempt (called by Meta)
       - Actions-only: routing only; agents execute deterministic flows.
     """
+
+    # ============
+    # DEV/Test routing mode
+    # ============
+    # You asked for a testing switch:
+    #   send "בעלים" -> from now on route messages from this sender to OPS agent
+    #   send "לקוח" / "מטופל" -> from now on route messages from this sender to Client agent
+    #
+    # Implementation notes:
+    # - Stored in Django cache with TTL (default 30 minutes).
+    # - This is good enough for testing. For production you'd want redis or DB-backed state.
+    MODE_TTL_SECONDS = int(getattr(settings, "WA_ROUTER_MODE_TTL_SECONDS", 30 * 60) or 30 * 60)
+
+    def _digits(s: str) -> str:
+        return "".join(ch for ch in (s or "") if ch.isdigit())
+
+    def _mode_key(*, sender_wa: str, phone_number_id: str) -> str:
+        # Include phone_number_id to avoid cross-business collisions.
+        return f"wa_router_mode:{_digits(phone_number_id)}:{_digits(sender_wa)}"
+
+    def _get_mode(*, sender_wa: str, phone_number_id: str) -> Optional[str]:
+        v = cache.get(_mode_key(sender_wa=sender_wa, phone_number_id=phone_number_id))
+        if v in {"ops", "client"}:
+            return v
+        return None
+
+    def _set_mode(*, sender_wa: str, phone_number_id: str, mode: str) -> None:
+        cache.set(_mode_key(sender_wa=sender_wa, phone_number_id=phone_number_id), mode, MODE_TTL_SECONDS)
+
+    def _clear_mode(*, sender_wa: str, phone_number_id: str) -> None:
+        cache.delete(_mode_key(sender_wa=sender_wa, phone_number_id=phone_number_id))
 
     def _mask(v: object) -> str:
         s = str(v or "")
@@ -2364,8 +2273,6 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     except Exception as e:
         print(f"[WA DB] failed: {e}", flush=True)
 
-
-    corr_id = uuid.uuid4().hex[:8]
 
     # Import locally to keep module import graph simple.
     from core.agents.client_agent import handle_whatsapp_webhook_payload as handle_client
@@ -2491,41 +2398,29 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
 
         return False
 
-    inbound_text_raw, sender_wa, phone_number_id = _extract_first_inbound_text_and_sender(payload)
+    inbound_text, sender_wa, phone_number_id = _extract_first_inbound_text_and_sender(payload)
 
-    sender_digits = _digits(sender_wa)
-    inbound_text, requested_mode = _strip_mode_prefix(inbound_text_raw)
-
-    # Standalone mode switch command (test convenience):
-    # 'בעלים' => route all next messages to OPS until 'לקוח'/'מטופל'
-    mode_cmd = _detect_mode_command(inbound_text)
-    if mode_cmd:
-        requested_mode = mode_cmd
-        _router_set_mode(sender_digits, requested_mode)
-        try:
-            from core.notifications import get_provider
-            if requested_mode == "ops":
-                get_provider().send(
-                    to=sender_wa,
-                    body="מצב בעלים הופעל. מעכשיו ההודעות מנותבות לסוכן התפעולי. כדי לחזור כתוב: לקוח",
-                    template_name="",
-                )
-            else:
-                get_provider().send(
-                    to=sender_wa,
-                    body="מצב לקוח הופעל. מעכשיו ההודעות מנותבות לסוכן המטופלים. כדי לחזור כתוב: בעלים",
-                    template_name="",
-                )
-        except Exception:
-            pass
-        # Short-circuit: this message is only a mode switch.
-        return JsonResponse({"ok": True})
-
-    if requested_mode:
-        # store for next messages (test convenience)
-        _router_set_mode(sender_digits, requested_mode)
-        # ensure agents see the stripped text (fixes "בעלים: כן" -> "כן")
-        _mutate_first_message_text(payload, inbound_text)
+    # --- DEV/Test: allow "בעלים" / "לקוח" switches ---
+    try:
+        t0 = (inbound_text or "").strip()
+        # Standalone switches (persist)
+        if re.fullmatch(r"בעלים", t0):
+            _set_mode(sender_wa=sender_wa, phone_number_id=phone_number_id, mode="ops")
+            try:
+                get_provider().send(to=sender_wa, body="מצב בעלים הופעל. כל ההודעות שלך ינותבו לתפעול עד שתשלח 'לקוח'.", template_name="")
+            except Exception:
+                pass
+            return JsonResponse({"ok": True})
+        if re.fullmatch(r"(לקוח|מטופל)", t0):
+            _set_mode(sender_wa=sender_wa, phone_number_id=phone_number_id, mode="client")
+            try:
+                get_provider().send(to=sender_wa, body="מצב לקוח הופעל. כל ההודעות שלך ינותבו למטופלים עד שתשלח 'בעלים'.", template_name="")
+            except Exception:
+                pass
+            return JsonResponse({"ok": True})
+    except Exception:
+        # never break webhook
+        pass
 
     # Resolve business by ops phone_number_id when possible.
     business = None
@@ -2534,30 +2429,42 @@ def whatsapp_webhook_view(request: HttpRequest) -> JsonResponse:
     if business is None:
         business = Business.objects.order_by("id").first()
 
-    # Decide mode: (1) stored mode, (2) explicit prefix in this message, (3) keyword heuristic.
-    stored_mode = _router_get_mode(sender_digits)
-    kw_mode = "ops" if _should_route_to_ops(text_in=inbound_text) else None
-    mode = stored_mode or requested_mode or kw_mode or "client"
-
-    # Hard RBAC gate: OPS only if sender is whitelisted.
-    is_ops_sender = _is_ops_sender(business=business, sender_wa=sender_wa) if business else False
-    if mode == "ops" and not is_ops_sender:
-        # downgrade to client when not authorized.
-        mode = "client"
-        _router_set_mode(sender_digits, "client")
-
     # Router debug (never break webhook)
     try:
+        raw = (inbound_text or "").strip()
+        # Per-message force routing via prefix: "בעלים: ..." / "לקוח: ..."
+        force_ops = bool(re.match(r"^\s*(בעלים|בעל|מנהל)\s*[:：\-]\s*", raw))
+        force_client = bool(re.match(r"^\s*(לקוח|מטופל)\s*[:：\-]\s*", raw))
+
+        stored_mode = _get_mode(sender_wa=sender_wa, phone_number_id=phone_number_id)
+        kw = _should_route_to_ops(text_in=inbound_text)
+        is_ops = _is_ops_sender(business=business, sender_wa=sender_wa) if business else False
         print(
-            f"[WA ROUTER][{corr_id}] raw_text={inbound_text_raw!r} text={inbound_text!r} sender={sender_wa} sender_digits={sender_digits} "
-            f"phone_number_id={phone_number_id} business_id={getattr(business, 'id', None)} mode={mode} stored_mode={stored_mode} requested_mode={requested_mode} is_ops_sender={is_ops_sender}",
+            f"[WA ROUTER] text={inbound_text!r} sender={sender_wa} phone_number_id={phone_number_id} "
+            f"business_id={getattr(business, 'id', None)} stored_mode={stored_mode!r} force_ops={force_ops} force_client={force_client} kw={kw} is_ops_sender={is_ops}",
             flush=True,
         )
     except Exception:
-        pass
+        stored_mode = None
+        force_ops = False
+        force_client = False
+        kw = False
+        is_ops = False
 
     try:
-        if business and mode == "ops":
+        route_to_ops = False
+        if force_ops:
+            route_to_ops = True
+        elif force_client:
+            route_to_ops = False
+        elif stored_mode == "ops":
+            route_to_ops = True
+        elif stored_mode == "client":
+            route_to_ops = False
+        else:
+            route_to_ops = bool(business and kw and is_ops)
+
+        if route_to_ops:
             handle_ops(payload)
         else:
             handle_client(payload)

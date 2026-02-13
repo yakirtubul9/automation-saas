@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import logging
-import secrets
 from dataclasses import dataclass
 from datetime import datetime, date, time as dtime, timedelta
 from typing import Any, Optional
@@ -15,8 +13,6 @@ from django.utils import timezone
 
 from core.models import Business, BusinessMembership, Room, RoomBlock
 from core.notifications import get_provider
-
-logger = logging.getLogger(__name__)
 
 
 # =========================
@@ -30,89 +26,44 @@ class OutgoingMessage:
     template_name: str = ""
 
 
-
-# =========================
-# Correlation id
-# =========================
-
-def _get_corr_id(payload: dict[str, Any]) -> str:
-    v = payload.get("corr_id") or payload.get("correlation_id") or payload.get("cid")
-    if isinstance(v, str) and v.strip():
-        return v.strip()[:32]
-    return secrets.token_hex(4)  # 8 chars
-
-
 def handle_whatsapp_webhook_payload(payload: dict[str, Any]) -> OutgoingMessage:
     """
     Ops Agent entrypoint.
 
-    - Adds mechanical logs with correlation id (cid)
-    - Supports 'בעלים: כן' by stripping prefix before yes/no detection
+    Expected: WhatsApp Cloud webhook payload.
+    - Auth: Option B (env whitelist) OR membership-based owner/staff.
+    - Supports a minimal command set + confirmation flow.
     """
-    cid = _get_corr_id(payload)
-
-    raw_text, sender_wa, phone_number_id = _extract_first_inbound_text_and_sender(payload)
-    text_in, requested_mode = _strip_mode_prefix(raw_text)
+    text_in, sender_wa, phone_number_id = _extract_first_inbound_text_and_sender(payload)
 
     business = _resolve_business(phone_number_id=phone_number_id)
     if business is None:
-        logger.info("[OPS_AGENT] cid=%s section=Router event=NoBusiness sender=%s raw=%r text=%r", cid, sender_wa, raw_text, text_in)
         return _send(sender_wa, "לא נמצא עסק במערכת.")
 
-    is_ops = _is_ops_sender(business=business, sender_wa=sender_wa)
-    yn_peek = _parse_yes_no(text_in)
-    logger.info(
-        "[OPS_AGENT] cid=%s section=InboundParse sender=%s raw=%r text=%r requested_mode=%r yesno_detected=%s yesno_value=%s business_id=%s",
-        cid,
-        sender_wa,
-        raw_text,
-        text_in,
-        requested_mode,
-        yn_peek is not None,
-        yn_peek,
-        business.id,
-    )
-
-    if not is_ops:
+    if not _is_ops_sender(business=business, sender_wa=sender_wa):
         return _send(sender_wa, "המספר לא מורשה לפעולות תפעול.")
 
-    # 1) Pending confirmation?
+    # 1) If we have a pending confirmation, process it first.
     pending = _pending_get(business_id=business.id, sender_wa=sender_wa)
     if pending:
-        logger.info("[OPS_AGENT] cid=%s section=Pending event=Found sender=%s action=%s", cid, sender_wa, pending.get("action"))
         decision = _parse_yes_no(text_in)
         if decision is None:
-            logger.info("[OPS_AGENT] cid=%s section=PendingDecision event=NeedYesNo sender=%s", cid, sender_wa)
             return _send(sender_wa, "לא הבנתי. לאשר? (כן/לא)")
         if decision is False:
             _pending_clear(business_id=business.id, sender_wa=sender_wa)
-            logger.info("[OPS_AGENT] cid=%s section=PendingDecision event=Rejected sender=%s", cid, sender_wa)
             return _send(sender_wa, "בוטל.")
+        # decision True
         try:
-            logger.info("[OPS_AGENT] cid=%s section=Execute event=Begin sender=%s action=%s", cid, sender_wa, pending.get("action"))
             out = _execute_pending(business=business, sender_wa=sender_wa, pending=pending)
-            logger.info("[OPS_AGENT] cid=%s section=Execute event=Ok sender=%s action=%s", cid, sender_wa, pending.get("action"))
-            return out
-        except Exception as e:
-            logger.exception("ops_agent execute_pending failed cid=%s", cid)
-            logger.info("[OPS_AGENT] cid=%s section=Execute event=Error sender=%s error=%s", cid, sender_wa, type(e).__name__)
-            return _send(sender_wa, "משהו השתבש בביצוע הפעולה.")
         finally:
             _pending_clear(business_id=business.id, sender_wa=sender_wa)
+        return out
 
-    # 2) New command
-    cmd = _parse_close_room_command(text_in, business_tz=business.timezone or "Asia/Jerusalem")
+    # 2) No pending -> parse a new command.
+    cmd = _parse_close_room_command(text_in, business=business)
     if cmd:
         room, start_dt, end_dt, reason = cmd
-        logger.info(
-            "[OPS_AGENT] cid=%s section=Command event=Parsed sender=%s intent=close_room room_id=%s start=%s end=%s has_reason=%s",
-            cid,
-            sender_wa,
-            room.id,
-            start_dt.isoformat(timespec="minutes"),
-            end_dt.isoformat(timespec="minutes"),
-            bool(reason),
-        )
+        # Create a pending action; require confirm.
         _pending_set(
             business_id=business.id,
             sender_wa=sender_wa,
@@ -125,22 +76,22 @@ def handle_whatsapp_webhook_payload(payload: dict[str, Any]) -> OutgoingMessage:
             },
             ttl_seconds=10 * 60,
         )
-        logger.info("[OPS_AGENT] cid=%s section=Pending event=Set sender=%s action=close_room ttl_seconds=%s", cid, sender_wa, 600)
         return _send(
             sender_wa,
             f"חדר {room.name} יסגר {start_dt:%Y-%m-%d %H:%M}-{end_dt:%H:%M}."
-            + (f"\\nסיבה: {reason}" if reason else "")
-            + "\\nלאשר? (כן/לא)"
+            + (f"\nסיבה: {reason}" if reason else "")
+            + "\nלאשר? (כן/לא)"
         )
 
-    logger.info("[OPS_AGENT] cid=%s section=Fallback event=Menu sender=%s text=%r", cid, sender_wa, text_in)
+    # Fallback menu
     return _send(
         sender_wa,
-        "פקודות לדוגמה:\\n"
-        "• סגור חדר 2 מחר 10:00-12:00 סיבה: תחזוקה\\n"
-        "• סגור חדר 1 היום 14:00-15:00\\n"
-        "\\nלאישור פעולה ממתינה: ענה כן/לא (אפשר גם 'בעלים: כן')."
+        "פקודות לדוגמה:\n"
+        "• סגור חדר 2 מחר 10:00-12:00 סיבה: תחזוקה\n"
+        "• סגור חדר 1 היום 14:00-15:00\n"
+        "\nלאישור פעולה ממתינה: ענה כן/לא (אפשר גם 'בעלים: כן')."
     )
+
 
 # =========================
 # Command parsing
@@ -150,11 +101,12 @@ _CLOSE_ROOM_RE = re.compile(
     r"^\s*סגור\s+חדר\s*(?P<room>\d+)\s+"
     r"(?P<day>היום|מחר|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4})\s+"
     r"(?P<start>\d{1,2}:\d{2})\s*-\s*(?P<end>\d{1,2}:\d{2})"
-    r"(?:\s+סיבה[:：]?\s*(?P<reason>.+))?\s*$"
+    # reason part is intentionally lenient: allows "...12:00 סיבה:מזגן" and "...12:00סיבה:מזגן"
+    r"(?:\s*(?:,?\s*)?סיבה[:：]?\s*(?P<reason>.+))?\s*$"
 )
 
 
-def _parse_close_room_command(text_in: str, *, business_tz: str) -> Optional[tuple[Room, datetime, datetime, str]]:
+def _parse_close_room_command(text_in: str, *, business: Business) -> Optional[tuple[Room, datetime, datetime, str]]:
     """
     Parses:
       סגור חדר 2 מחר 10:00-12:00 סיבה: תחזוקה
@@ -168,10 +120,10 @@ def _parse_close_room_command(text_in: str, *, business_tz: str) -> Optional[tup
     if not m:
         return None
 
-    tz = ZoneInfo(business_tz or "Asia/Jerusalem")
+    tz = ZoneInfo(getattr(business, "timezone", None) or "Asia/Jerusalem")
 
     room_token = m.group("room")
-    room = _resolve_room(room_token)
+    room = _resolve_room(business=business, room_token=room_token)
     if room is None:
         return None
 
@@ -195,9 +147,9 @@ def _parse_close_room_command(text_in: str, *, business_tz: str) -> Optional[tup
     return room, start_dt, end_dt, reason
 
 
-def _resolve_room(room_token: str) -> Optional[Room]:
+def _resolve_room(*, business: Business, room_token: str) -> Optional[Room]:
     # Prefer "name" match (users say "חדר 2" but Room.name is "2")
-    room = Room.objects.filter(name=str(int(room_token))).order_by("id").first()
+    room = Room.objects.filter(business=business, name=str(int(room_token))).order_by("id").first()
     if room:
         return room
     # Fallback by id
@@ -205,7 +157,7 @@ def _resolve_room(room_token: str) -> Optional[Room]:
         rid = int(room_token)
     except Exception:
         return None
-    return Room.objects.filter(pk=rid).order_by("id").first()
+    return Room.objects.filter(business=business, pk=rid).order_by("id").first()
 
 
 def _parse_day_token(token: str, *, tz: ZoneInfo) -> Optional[date]:
@@ -271,21 +223,6 @@ def _pending_set(*, business_id: int, sender_wa: str, pending: dict[str, Any], t
 def _pending_clear(*, business_id: int, sender_wa: str) -> None:
     cache.delete(_pending_key(business_id=business_id, sender_wa=sender_wa))
 
-
-
-# =========================
-# Mode/prefix stripping
-# =========================
-
-_MODE_PREFIX_RE = re.compile(r"^\s*(בעלים|מטופל|לקוח|בעל|מנהל)\s*[:：\-]\s*", re.UNICODE)
-
-def _strip_mode_prefix(text: str) -> tuple[str, str | None]:
-    t = (text or "").strip()
-    m = _MODE_PREFIX_RE.match(t)
-    if not m:
-        return t, None
-    mode = m.group(1)
-    return t[m.end():].strip(), mode
 
 # =========================
 # Yes/No parsing

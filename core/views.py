@@ -9,14 +9,39 @@ from django.core import signing
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotFound
 from django.middleware.csrf import get_token
 
-from .models import Business, Appointment, Reminder, CancellationRequest, AppointmentChangeProposal
+from .models import (
+    Business,
+    BusinessMembership,
+    Appointment,
+    Reminder,
+    CancellationRequest,
+    AppointmentChangeProposal,
+)
 
 
 def _get_or_create_business_for_user(user) -> Business:
-    # לוקחים את הראשון אם יש כמה, אחרת יוצרים אחד בסיסי
+    """Resolve the current business context for a logged-in user.
+
+    Important for tests + real UI:
+    - Staff/Provider users usually do NOT own the Business, but they do have BusinessMembership.
+    - Creating a new Business per user breaks RBAC + makes the UI show empty data.
+    """
+
+    membership = (
+        BusinessMembership.objects.select_related("business")
+        .filter(user=user)
+        .order_by("id")
+        .first()
+    )
+    if membership:
+        return membership.business
+
+    # Fallback for owners (legacy)
     business = Business.objects.filter(owner=user).order_by("id").first()
     if business:
         return business
+
+    # Last resort: create a new Business for a fresh owner user
     return Business.objects.create(owner=user, name=f"{user.username} Business")
 
 

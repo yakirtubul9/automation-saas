@@ -1430,7 +1430,7 @@ class UiRbacAndPaginationTests(TestCase):
             whatsapp_number="+972500000099",
         )
         self.service = Service.objects.create(business=self.business, name="Consult", duration_minutes=30, specialty=self.spec)
-        self.client = Client.objects.create(business=self.business, full_name="John Patient", phone_number="+972500000077")
+        self.patient = Client.objects.create(business=self.business, full_name="John Patient", phone_number="+972500000077")
 
         start = (timezone.now() + timedelta(days=1)).replace(minute=0, second=0, microsecond=0)
         # create many appointments for pagination
@@ -1439,7 +1439,7 @@ class UiRbacAndPaginationTests(TestCase):
                 business=self.business,
                 provider=self.provider,
                 room=self.room,
-                client=self.client,
+                client=self.patient,
                 service=self.service,
                 start_time=start + timedelta(minutes=30 * i),
                 end_time=start + timedelta(minutes=30 * i + 30),
@@ -1464,9 +1464,11 @@ class UiRbacAndPaginationTests(TestCase):
     def test_ui_appointments_paginates(self):
         self.client.login(username="ui_staff", password="pass")
         day = timezone.localdate(timezone.now() + timedelta(days=1)).isoformat()
-        resp1 = self.client.get(reverse("ui_appointments") + f"?day={day}&page=1")
-        resp2 = self.client.get(reverse("ui_appointments") + f"?day={day}&page=2")
+        resp1 = self.client.get(reverse("ui_appointments") + f"?day={day}&per_page=10&page=1")
+        resp2 = self.client.get(reverse("ui_appointments") + f"?day={day}&per_page=10&page=2")
         self.assertEqual(resp1.status_code, 200)
         self.assertEqual(resp2.status_code, 200)
-        # Should have different first-row times due to pagination
+        # Page 2 should be different (and not empty)
+        self.assertGreater(len(resp1.context["rows"]), 0)
+        self.assertGreater(len(resp2.context["rows"]), 0)
         self.assertNotEqual(resp1.context["rows"][0]["start"], resp2.context["rows"][0]["start"])
